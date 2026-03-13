@@ -1,13 +1,14 @@
 "use client";
 
 import React, { useEffect, useState } from 'react';
-import { supabase } from '../utils/supabase'; // Adjust path if needed
+import { supabase } from '../utils/supabase'; 
 import { useRouter } from 'next/navigation';
 
 interface HealthData {
-  temperature: number;
-  bpm: number;
-  spo2: number;
+  id?: string;
+  temperature: number | string;
+  bpm: number | string;
+  spo2: number | string;
   ai_response: string;
   identified_name: string;
   created_at: string;
@@ -16,6 +17,7 @@ interface HealthData {
 export default function AstraDashboard() {
   const [latestData, setLatestData] = useState<HealthData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [session, setSession] = useState<any>(null);
   
   const [accountName, setAccountName] = useState("Patient"); 
@@ -50,6 +52,7 @@ export default function AstraDashboard() {
 
     initDashboard();
 
+    // REAL-TIME LISTENER
     const subscription = supabase
       .channel('vitals-update')
       .on(
@@ -57,6 +60,7 @@ export default function AstraDashboard() {
         { event: 'INSERT', table: 'health_data', schema: 'public' }, 
         (payload: any) => {
           if (payload.new && isMounted) {
+            console.log("Realtime Update Received:", payload.new);
             setLatestData(payload.new as HealthData);
           }
         }
@@ -70,6 +74,7 @@ export default function AstraDashboard() {
   }, [router]);
 
   async function fetchLatestVitals() {
+    setIsRefreshing(true);
     try {
       const { data, error } = await supabase
         .from('health_data')
@@ -78,15 +83,18 @@ export default function AstraDashboard() {
         .limit(1)
         .single();
 
-      if (!error && data) {
+      if (error) {
+        console.warn("No vitals found or RLS blocked the read:", error.message);
+      } else if (data) {
         setLatestData(data as HealthData);
       }
     } catch (err) {
       console.error("Error fetching vitals:", err);
+    } finally {
+      setIsRefreshing(false);
     }
   }
 
-  // LOGOUT FUNCTION
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.replace('/auth');
@@ -123,7 +131,7 @@ export default function AstraDashboard() {
             </p>
           </div>
 
-          {/* TOP RIGHT CONTROLS: Logo & New Red Logout Button */}
+          {/* TOP RIGHT CONTROLS */}
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-4 bg-white p-4 rounded-3xl shadow-sm border border-slate-200 hidden md:flex">
               <div className="w-12 h-12 bg-green-600 rounded-2xl flex items-center justify-center shadow-lg shadow-green-600/20">
@@ -135,7 +143,6 @@ export default function AstraDashboard() {
               </div>
             </div>
 
-            {/* NEW RED LOGOUT BUTTON */}
             <button 
               onClick={handleLogout}
               className="flex items-center gap-3 bg-red-600 hover:bg-red-500 text-white p-4 md:px-6 md:py-4 rounded-3xl shadow-lg shadow-red-600/30 transition-all active:scale-95 border border-red-500/50"
@@ -149,11 +156,37 @@ export default function AstraDashboard() {
           </div>
         </div>
 
-        {/* Live Vitals Grid */}
+        {/* --- LIVE VITALS GRID --- */}
+        {/* We use Number() wrapper to ensure strings from the database don't crash the .toFixed() method */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <StatCard icon="❤️" title="Heart Rate" value={latestData ? String(latestData.bpm) : "--"} unit="bpm" status="Pulse Sensor" color="bg-red-50" textColor="text-red-600" pulse={true} />
-          <StatCard icon="🌡️" title="Body Temp" value={latestData ? latestData.temperature.toFixed(1) : "--"} unit="°C" status="IR Thermal" color="bg-orange-50" textColor="text-orange-600" />
-          <StatCard icon="💧" title="Blood Oxygen" value={latestData ? String(latestData.spo2) : "--"} unit="%" status="SpO2 Saturation" color="bg-blue-50" textColor="text-blue-600" />
+          <StatCard 
+            icon="❤️" 
+            title="Heart Rate" 
+            value={latestData ? Number(latestData.bpm).toString() : "--"} 
+            unit="bpm" 
+            status="Pulse Sensor" 
+            color="bg-red-50" 
+            textColor="text-red-600" 
+            pulse={true} 
+          />
+          <StatCard 
+            icon="🌡️" 
+            title="Body Temp" 
+            value={latestData ? Number(latestData.temperature).toFixed(1) : "--"} 
+            unit="°C" 
+            status="IR Thermal" 
+            color="bg-orange-50" 
+            textColor="text-orange-600" 
+          />
+          <StatCard 
+            icon="💧" 
+            title="Blood Oxygen" 
+            value={latestData ? Number(latestData.spo2).toString() : "--"} 
+            unit="%" 
+            status="SpO2 Saturation" 
+            color="bg-blue-50" 
+            textColor="text-blue-600" 
+          />
         </div>
 
         {/* Main Interface Content */}
@@ -172,7 +205,7 @@ export default function AstraDashboard() {
                  {latestData ? (
                    <p className="text-2xl font-bold text-slate-800 leading-relaxed italic">"{latestData.ai_response}"</p>
                  ) : (
-                   <p className="text-xl font-bold text-slate-300 italic animate-pulse">Place your finger on the A.S.T.R.A sensor to begin scan...</p>
+                   <p className="text-xl font-bold text-slate-300 italic animate-pulse">Waiting for hardware telemetry...</p>
                  )}
                </div>
                <div className="mt-8 pt-8 border-t border-slate-100 flex flex-wrap items-center justify-between gap-4">
@@ -181,7 +214,7 @@ export default function AstraDashboard() {
                       <i className="fas fa-user text-slate-400 text-xs"></i>
                     </div>
                     <span className="text-[11px] font-black text-slate-900 uppercase tracking-widest">
-                      Subject: {latestData?.identified_name || "Awaiting Identification"}
+                      Subject: {latestData?.identified_name || "Unknown"}
                     </span>
                  </div>
                  <span className="text-[10px] font-bold text-slate-400">
@@ -195,14 +228,24 @@ export default function AstraDashboard() {
             <div className="bg-[#0f172a] rounded-[2.5rem] p-8 text-white shadow-2xl">
               <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-8 text-center">System Control</h2>
               <div className="space-y-4">
-                 <button className="w-full py-4 bg-green-600 hover:bg-green-500 rounded-2xl font-black text-[10px] uppercase tracking-[0.2em] transition-all shadow-lg shadow-green-900/20 active:scale-95">
-                   Force Hardware Scan
+                 
+                 {/* NEW MANUAL SYNC BUTTON */}
+                 <button 
+                   onClick={fetchLatestVitals}
+                   disabled={isRefreshing}
+                   className="w-full py-4 bg-cyan-600 hover:bg-cyan-500 disabled:bg-cyan-800 rounded-2xl font-black text-[10px] uppercase tracking-[0.2em] transition-all shadow-lg shadow-cyan-900/20 active:scale-95 flex items-center justify-center gap-2"
+                 >
+                   {isRefreshing ? (
+                     <><i className="fas fa-spinner fa-spin"></i> Syncing...</>
+                   ) : (
+                     <><i className="fas fa-sync-alt"></i> Sync Latest Scan</>
+                   )}
                  </button>
-                 {/* I removed the redundant bottom logout button here to keep it clean! */}
+
                  <div className="mt-6 pt-6 border-t border-slate-800">
                     <div className="flex justify-between items-center text-[10px] font-bold">
                        <span className="text-slate-500 uppercase tracking-widest">ESP32 Status</span>
-                       <span className="text-green-500 uppercase tracking-widest">Live</span>
+                       <span className="text-green-500 uppercase tracking-widest">Live Listening</span>
                     </div>
                  </div>
               </div>
