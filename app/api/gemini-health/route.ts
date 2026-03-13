@@ -106,17 +106,36 @@ export async function POST(request: NextRequest) {
       }
     ]);
 
-    const aiOutput = JSON.parse(result.response.text());
+    // --- NEW: BULLET-PROOF JSON PARSING ---
+    let rawText = result.response.text();
+    
+    // Strip out markdown backticks if Gemini added them (Fixes the Markdown crash trap)
+    rawText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
+    
+    let aiOutput;
+    try {
+      aiOutput = JSON.parse(rawText);
+    } catch (parseError) {
+      console.error("Failed to parse Gemini JSON:", rawText);
+      return NextResponse.json({ error: 'AI output format error' }, { status: 500 });
+    }
+
+    // --- NEW: STRICT UUID SANITIZER ---
+    let safeUserId = aiOutput.identified_user_id;
+    // If Gemini outputs the literal word "null", empty string, or "None", convert it to an actual database null
+    if (safeUserId === "null" || safeUserId === "None" || safeUserId === "") {
+      safeUserId = null;
+    }
 
     // Save to Database (Triggers the Dashboard instantly)
     await supabaseAdmin.from('health_data').insert({
       device_id: deviceId,
-      user_id: aiOutput.identified_user_id || null, 
+      user_id: safeUserId, 
       temperature: temp,
       bpm: bpm,
       spo2: spo2,
-      ai_response: aiOutput.ai_response,
-      identified_name: aiOutput.identified_name 
+      ai_response: aiOutput.ai_response || "Telemetry recorded.",
+      identified_name: aiOutput.identified_name || "Unknown Patient"
     });
 
     // Return a lightweight success message to the ESP32 so it can finish its loop quickly
@@ -133,6 +152,7 @@ export async function POST(request: NextRequest) {
 
   } catch (error) {
     console.error('API Error:', error);
+    // This logs the exact Google Rate Limit Error to Vercel without crashing Next.js
     return NextResponse.json({ error: 'System Error during API execution' }, { status: 500 });
   }
 }
