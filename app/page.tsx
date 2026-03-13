@@ -18,7 +18,6 @@ export default function AstraDashboard() {
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState<any>(null);
   
-  // NEW: State to hold the logged-in user's name
   const [accountName, setAccountName] = useState("Patient"); 
   const router = useRouter();
 
@@ -26,7 +25,6 @@ export default function AstraDashboard() {
     let isMounted = true;
 
     const initDashboard = async () => {
-      // 1. Wait for the definitive session state
       const { data: { session: currentSession } } = await supabase.auth.getSession();
       
       if (!currentSession) {
@@ -40,7 +38,6 @@ export default function AstraDashboard() {
       if (isMounted) {
         setSession(currentSession);
         
-        // Extract the name from the session metadata we saved during signup
         const displayName = currentSession.user?.user_metadata?.display_name;
         if (displayName) {
           setAccountName(displayName);
@@ -53,7 +50,6 @@ export default function AstraDashboard() {
 
     initDashboard();
 
-    // 2. REAL-TIME Listener
     const subscription = supabase
       .channel('vitals-update')
       .on(
@@ -90,7 +86,12 @@ export default function AstraDashboard() {
     }
   }
 
-  // PREVENT FLICKER & LOOPING: Show loading screen until auth is 100% verified
+  // LOGOUT FUNCTION
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    router.replace('/auth');
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-[#020617] flex items-center justify-center">
@@ -104,18 +105,16 @@ export default function AstraDashboard() {
     );
   }
 
-  // If loading is done but no session (meaning we are redirecting), render nothing to stop the loop
   if (!session) return null;
 
   return (
     <main className="min-h-screen bg-slate-50 p-4 md:p-8 selection:bg-green-100">
       <div className="max-w-7xl mx-auto">
 
-        {/* Header Section */}
+        {/* --- HEADER SECTION --- */}
         <div className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-6">
           <div>
             <h1 className="text-4xl font-black text-slate-900 tracking-tight">
-              {/* UPDATED: Now uses the accountName state to greet the logged-in user immediately */}
               Welcome, <span className="text-green-600">{accountName}</span>
             </h1>
             <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.2em] mt-2">
@@ -124,14 +123,29 @@ export default function AstraDashboard() {
             </p>
           </div>
 
-          <div className="flex items-center gap-4 bg-white p-4 rounded-3xl shadow-sm border border-slate-200">
-            <div className="w-12 h-12 bg-green-600 rounded-2xl flex items-center justify-center shadow-lg shadow-green-600/20">
-              <i className="fas fa-microchip text-white text-xl"></i>
+          {/* TOP RIGHT CONTROLS: Logo & New Red Logout Button */}
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-4 bg-white p-4 rounded-3xl shadow-sm border border-slate-200 hidden md:flex">
+              <div className="w-12 h-12 bg-green-600 rounded-2xl flex items-center justify-center shadow-lg shadow-green-600/20">
+                <i className="fas fa-microchip text-white text-xl"></i>
+              </div>
+              <div>
+                <h2 className="text-xl font-black text-slate-900 leading-tight tracking-tighter">A.S.T.R.A</h2>
+                <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">v2.0 Flash Core</p>
+              </div>
             </div>
-            <div>
-              <h2 className="text-xl font-black text-slate-900 leading-tight tracking-tighter">A.S.T.R.A</h2>
-              <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">v2.0 Flash Core</p>
-            </div>
+
+            {/* NEW RED LOGOUT BUTTON */}
+            <button 
+              onClick={handleLogout}
+              className="flex items-center gap-3 bg-red-600 hover:bg-red-500 text-white p-4 md:px-6 md:py-4 rounded-3xl shadow-lg shadow-red-600/30 transition-all active:scale-95 border border-red-500/50"
+              title="Terminate Session"
+            >
+              <i className="fas fa-power-off text-lg"></i>
+              <span className="font-black text-[10px] uppercase tracking-[0.2em] hidden sm:block">
+                Terminate
+              </span>
+            </button>
           </div>
         </div>
 
@@ -167,7 +181,6 @@ export default function AstraDashboard() {
                       <i className="fas fa-user text-slate-400 text-xs"></i>
                     </div>
                     <span className="text-[11px] font-black text-slate-900 uppercase tracking-widest">
-                      {/* Notice how this still shows the AI identified name down here */}
                       Subject: {latestData?.identified_name || "Awaiting Identification"}
                     </span>
                  </div>
@@ -185,15 +198,7 @@ export default function AstraDashboard() {
                  <button className="w-full py-4 bg-green-600 hover:bg-green-500 rounded-2xl font-black text-[10px] uppercase tracking-[0.2em] transition-all shadow-lg shadow-green-900/20 active:scale-95">
                    Force Hardware Scan
                  </button>
-                 <button 
-                   onClick={async () => {
-                     await supabase.auth.signOut();
-                     router.replace('/auth');
-                   }}
-                   className="w-full py-4 bg-slate-800 hover:bg-red-900/40 rounded-2xl font-black text-[10px] uppercase tracking-[0.2em] transition-all active:scale-95 border border-slate-700 hover:border-red-500/50"
-                 >
-                   Logout & Terminate
-                 </button>
+                 {/* I removed the redundant bottom logout button here to keep it clean! */}
                  <div className="mt-6 pt-6 border-t border-slate-800">
                     <div className="flex justify-between items-center text-[10px] font-bold">
                        <span className="text-slate-500 uppercase tracking-widest">ESP32 Status</span>
