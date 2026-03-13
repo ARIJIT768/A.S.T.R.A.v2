@@ -23,6 +23,16 @@ function corsHeaders() {
   };
 }
 
+function jsonResponse(body: Record<string, any>, status: number, extraHeaders: Record<string, string> = {}) {
+  return NextResponse.json(body, {
+    status,
+    headers: {
+      ...corsHeaders(),
+      ...extraHeaders,
+    },
+  });
+}
+
 function createWavHeader(dataLength: number, sampleRate = 8000) {
   const header = Buffer.alloc(44);
   header.write('RIFF', 0);
@@ -30,12 +40,12 @@ function createWavHeader(dataLength: number, sampleRate = 8000) {
   header.write('WAVE', 8);
   header.write('fmt ', 12);
   header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20);   // PCM
-  header.writeUInt16LE(1, 22);   // mono
+  header.writeUInt16LE(1, 20); // PCM
+  header.writeUInt16LE(1, 22); // mono
   header.writeUInt32LE(sampleRate, 24);
   header.writeUInt32LE(sampleRate * 2, 28); // byte rate
-  header.writeUInt16LE(2, 32);   // block align
-  header.writeUInt16LE(16, 34);  // bits/sample
+  header.writeUInt16LE(2, 32); // block align
+  header.writeUInt16LE(16, 34); // bits/sample
   header.write('data', 36);
   header.writeUInt32LE(dataLength, 40);
   return header;
@@ -59,11 +69,17 @@ function safeJsonParse(text: string) {
 
 function sanitizeUserId(value: unknown): string | null {
   if (value === null || value === undefined) return null;
+
   const str = String(value).trim();
   if (!str || str === 'null' || str === 'None' || str === 'undefined') {
     return null;
   }
+
   return str;
+}
+
+function normalizeGeminiText(text: string) {
+  return text.replace(/```json/g, '').replace(/```/g, '').trim();
 }
 
 // ==========================================
@@ -80,15 +96,12 @@ export async function OPTIONS() {
 // BROWSER TEST HANDLER
 // ==========================================
 export async function GET() {
-  return NextResponse.json(
+  return jsonResponse(
     {
       status: 'A.S.T.R.A API is ONLINE',
       message: 'Awaiting ESP32 telemetry via POST.',
     },
-    {
-      status: 200,
-      headers: corsHeaders(),
-    }
+    200
   );
 }
 
@@ -107,28 +120,23 @@ export async function POST(request: NextRequest) {
     const audioBuffer = Buffer.from(rawAudio);
 
     if (!audioBuffer || audioBuffer.length === 0) {
-      return NextResponse.json(
-        { error: 'No audio detected from ESP32' },
-        { status: 400, headers: corsHeaders() }
+      return jsonResponse(
+        { error: 'NO_AUDIO', message: 'No audio detected from ESP32.' },
+        400
       );
     }
 
     // ==========================================
     // DETERMINE AUDIO FORMAT
     // ==========================================
-    // Your current ESP32 sends a proper WAV file with Content-Type: audio/wav.
-    // So DO NOT add another WAV header in that case.
     let audioForGemini: Buffer;
-    let mimeType: string;
+    let mimeType = 'audio/wav';
 
     if (contentType.includes('audio/wav') || looksLikeWav(audioBuffer)) {
       audioForGemini = audioBuffer;
-      mimeType = 'audio/wav';
     } else {
-      // Fallback for old ESP32 code that sent raw PCM
       const wavHeader = createWavHeader(audioBuffer.length, 8000);
       audioForGemini = Buffer.concat([wavHeader, audioBuffer]);
-      mimeType = 'audio/wav';
     }
 
     // ==========================================
@@ -140,9 +148,12 @@ export async function POST(request: NextRequest) {
 
     if (usersError) {
       console.error('Supabase users fetch error:', usersError);
-      return NextResponse.json(
-        { error: 'Failed to load registered users' },
-        { status: 500, headers: corsHeaders() }
+      return jsonResponse(
+        {
+          error: 'USERS_FETCH_FAILED',
+          message: usersError.message || 'Failed to load registered users.',
+        },
+        500
       );
     }
 
@@ -182,9 +193,10 @@ Use exactly this JSON schema:
   "identified_name": "Matched name or Unidentified Patient",
   "ai_response": "Two-sentence medical insight"
 }
-`.trim();
+    `.trim();
 
     let result;
+
     try {
       result = await model.generateContent([
         prompt,
@@ -203,63 +215,79 @@ Use exactly this JSON schema:
         geminiError?.toString() ||
         'Unknown Gemini error';
 
-      // Rate limit / quota handling
+      const lower = message.toLowerCase();
+
+      // ==========================================
+      // RATE LIMIT / QUOTA HANDLING
+      // ==========================================
       if (
         message.includes('429') ||
-        message.toLowerCase().includes('too many requests') ||
-        message.toLowerCase().includes('quota') ||
-        message.toLowerCase().includes('rate limit')
+        lower.includes('too many requests') ||
+        lower.includes('quota') ||
+        lower.includes('rate limit')
       ) {
-        return NextResponse.json(
+        return jsonResponse(
           {
             error: 'RATE_LIMIT',
             message: 'Gemini quota or rate limit exceeded. Retry later.',
           },
+          429,
           {
-            status: 429,
-            headers: {
-              ...corsHeaders(),
-              'Retry-After': '60',
-            },
+            'Retry-After': '60',
           }
         );
       }
 
-      return NextResponse.json(
+      // ==========================================
+      // INVALID / EXPIRED API KEY HANDLING
+      // ==========================================
+      if (
+        lower.includes('api key expired') ||
+        lower.includes('api_key_invalid') ||
+        lower.includes('api key invalid') ||
+        lower.includes('please renew the api key') ||
+        lower.includes('invalid api key')
+      ) {
+        return jsonResponse(
+          {
+            error: 'INVALID_GEMINI_KEY',
+            message: 'Gemini API key is invalid or expired. Update the Vercel environment variable.',
+          },
+          401
+        );
+      }
+
+      // ==========================================
+      // OTHER GEMINI FAILURES
+      // ==========================================
+      return jsonResponse(
         {
           error: 'GEMINI_FAILURE',
           message,
         },
-        {
-          status: 500,
-          headers: corsHeaders(),
-        }
+        500
       );
     }
 
     // ==========================================
     // PARSE GEMINI RESPONSE
     // ==========================================
-    let rawText = result.response.text() || '';
-    rawText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
-
+    const rawText = normalizeGeminiText(result.response.text() || '');
     const aiOutput = safeJsonParse(rawText);
 
     if (!aiOutput) {
       console.error('Failed to parse Gemini JSON:', rawText);
-      return NextResponse.json(
+      return jsonResponse(
         {
           error: 'AI_OUTPUT_FORMAT_ERROR',
           raw: rawText,
         },
-        {
-          status: 500,
-          headers: corsHeaders(),
-        }
+        500
       );
     }
 
     const safeUserId = sanitizeUserId(aiOutput.identified_user_id);
+
     const identifiedName =
       typeof aiOutput.identified_name === 'string' && aiOutput.identified_name.trim()
         ? aiOutput.identified_name.trim()
@@ -285,44 +313,35 @@ Use exactly this JSON schema:
 
     if (insertError) {
       console.error('Supabase insert error:', insertError);
-      return NextResponse.json(
+      return jsonResponse(
         {
           error: 'DATABASE_INSERT_FAILED',
           message: insertError.message,
         },
-        {
-          status: 500,
-          headers: corsHeaders(),
-        }
+        500
       );
     }
 
     // ==========================================
     // SUCCESS RESPONSE TO ESP32
     // ==========================================
-    return NextResponse.json(
+    return jsonResponse(
       {
         status: 'Success',
         message: 'Data saved to dashboard.',
         identified_name: identifiedName,
       },
-      {
-        status: 200,
-        headers: corsHeaders(),
-      }
+      200
     );
   } catch (error: any) {
     console.error('API Error:', error);
 
-    return NextResponse.json(
+    return jsonResponse(
       {
         error: 'SYSTEM_ERROR',
         message: error?.message || 'System Error during API execution',
       },
-      {
-        status: 500,
-        headers: corsHeaders(),
-      }
+      500
     );
   }
 }
