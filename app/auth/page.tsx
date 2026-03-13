@@ -14,7 +14,7 @@ export default function AstraAuth() {
   const [otp, setOtp] = useState('');
   const [resendTimer, setResendTimer] = useState(0); 
 
-  // Anti-Looping State
+  // Anti-Looping & UI State
   const [pageLoading, setPageLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -25,7 +25,7 @@ export default function AstraAuth() {
   useEffect(() => {
     let isMounted = true;
 
-    // 1. Initial Session Check (Stops the Loop!)
+    // 1. Initial Session Check
     const checkExistingSession = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (session && isMounted) {
@@ -37,7 +37,7 @@ export default function AstraAuth() {
 
     checkExistingSession();
 
-    // 2. Listen for successful OTP verify
+    // 2. Listen for successful login (This is when the SQL Trigger fires!)
     const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_IN' && session && isMounted) {
         setSuccessMsg('Authorization Verified. Accessing Portal...');
@@ -70,12 +70,21 @@ export default function AstraAuth() {
       const { error } = await supabase.auth.signInWithOtp({ 
         email: email.trim(),
         options: {
+          // If isSignUp is false, Supabase blocks the login if the email isn't in the DB
           shouldCreateUser: isSignUp, 
+          // We pass the name here. The SQL trigger catches it and puts it in public.users!
           data: isSignUp ? { display_name: username.trim() } : undefined
         }
       });
 
-      if (error) throw error;
+      if (error) {
+        // SMART ERROR HANDLING: Tell the user exactly what went wrong
+        if (error.message.includes('Signups not allowed')) {
+          throw new Error("Account not found. Please select 'New User' to register.");
+        }
+        throw error;
+      }
+      
       setIsOtpSent(true);
       setResendTimer(60);
       setSuccessMsg('Verification code transmitted to your email.');
@@ -98,8 +107,9 @@ export default function AstraAuth() {
         type: 'email'
       });
       if (error) throw error;
+      // Note: We don't manually route here. The onAuthStateChange listener handles it.
     } catch (err: any) {
-      setErrorMsg("Invalid or expired code.");
+      setErrorMsg("Invalid or expired access code.");
       setOtp(''); 
     } finally {
       setActionLoading(false);
@@ -199,7 +209,10 @@ export default function AstraAuth() {
       </div>
 
       <button 
-        onClick={() => setIsSignUp(!isSignUp)}
+        onClick={() => {
+          setIsSignUp(!isSignUp);
+          setErrorMsg(''); // Clear errors when switching modes
+        }}
         className="mt-10 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 hover:text-cyan-400"
       >
         {isSignUp ? 'Already Registered? Login' : 'New User? Initialize Registry'}
