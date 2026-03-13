@@ -1,14 +1,14 @@
 "use client";
 
 import React, { useEffect, useState, useRef } from 'react';
-import { supabase } from '../utils/supabase'; 
+import { supabase } from '../utils/supabase'; // Ensure this path matches your project structure
 import { useRouter } from 'next/navigation';
 
 interface HealthData {
   id?: string;
-  temperature: number | string;
-  bpm: number | string;
-  spo2: number | string;
+  temperature: number;
+  bpm: number;
+  spo2: number;
   ai_response: string;
   identified_name: string;
   created_at: string;
@@ -19,286 +19,229 @@ export default function AstraDashboard() {
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [session, setSession] = useState<any>(null);
-  const [accountName, setAccountName] = useState("Patient"); 
+  const [accountName, setAccountName] = useState("Doctor"); 
   
-  // Audio Playback States
-  const [isFetchingAudio, setIsFetchingAudio] = useState(false);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
-  
   const router = useRouter();
 
+  // ==========================================
+  // FETCH LATEST DATA MANUALLY
+  // ==========================================
+  const fetchLatestData = async () => {
+    setIsRefreshing(true);
+    const { data, error } = await supabase
+      .from('health_data')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (data) {
+      setLatestData(data);
+    }
+    setIsRefreshing(false);
+    setLoading(false);
+  };
+
+  // ==========================================
+  // TEXT-TO-SPEECH (A.S.T.R.A'S VOICE)
+  // ==========================================
+  const playDiagnosisAudio = (text: string) => {
+    if ('speechSynthesis' in window) {
+      // Cancel any ongoing speech
+      window.speechSynthesis.cancel();
+      
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1.0; 
+      utterance.pitch = 1.1; 
+      
+      utterance.onstart = () => setIsPlayingAudio(true);
+      utterance.onend = () => setIsPlayingAudio(false);
+      utterance.onerror = () => setIsPlayingAudio(false);
+
+      window.speechSynthesis.speak(utterance);
+    }
+  };
+
+  // ==========================================
+  // INITIALIZATION & REALTIME LISTENER
+  // ==========================================
   useEffect(() => {
     let isMounted = true;
 
     const initDashboard = async () => {
+      // Optional: Check Auth Session (remove if you don't use Supabase Auth)
       const { data: { session: currentSession } } = await supabase.auth.getSession();
       
-      if (!currentSession) {
-        if (isMounted) {
-          setLoading(false);
-          router.replace('/auth'); 
-        }
-        return;
-      }
-
-      if (isMounted) {
+      if (currentSession && isMounted) {
         setSession(currentSession);
         const displayName = currentSession.user?.user_metadata?.display_name;
         if (displayName) setAccountName(displayName);
-
-        await fetchLatestVitals();
-        setLoading(false);
       }
+
+      await fetchLatestData();
     };
 
     initDashboard();
 
-    // REAL-TIME LISTENER
-    const subscription = supabase
-      .channel('vitals-update')
+    // 🔥 THE MAGIC: SUPABASE REALTIME LISTENER
+    // This listens for new rows inserted by your ESP32/Vercel API
+    const channel = supabase
+      .channel('live-health-data')
       .on(
-        'postgres_changes' as any, 
-        { event: 'INSERT', table: 'health_data', schema: 'public' }, 
-        (payload: any) => {
-          if (payload.new && isMounted) {
-            console.log("Realtime Update Received:", payload.new);
-            setLatestData(payload.new as HealthData);
-            
-            // Attempt to auto-play the new response
-            if (payload.new.ai_response) {
-               playAIVoice(payload.new.ai_response).catch((e) => {
-                 console.warn("Browser blocked autoplay. User must click play.", e);
-               });
-            }
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'health_data' },
+        (payload) => {
+          console.log('📡 NEW SCAN RECEIVED FROM ESP32!', payload.new);
+          const newData = payload.new as HealthData;
+          
+          // 1. Instantly update the screen
+          setLatestData(newData);
+          
+          // 2. Instantly speak the AI's diagnosis
+          if (newData.ai_response) {
+            playDiagnosisAudio(newData.ai_response);
           }
         }
       )
       .subscribe();
 
-    return () => { 
+    return () => {
       isMounted = false;
-      supabase.removeChannel(subscription); 
+      supabase.removeChannel(channel);
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
     };
-  }, [router]);
-
-  async function fetchLatestVitals() {
-    setIsRefreshing(true);
-    try {
-      const { data, error } = await supabase
-        .from('health_data')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .single();
-
-      if (error) {
-        console.warn("No vitals found or RLS blocked the read:", error.message);
-      } else if (data) {
-        setLatestData(data as HealthData);
-      }
-    } catch (err) {
-      console.error("Error fetching vitals:", err);
-    } finally {
-      setIsRefreshing(false);
-    }
-  }
+  }, []);
 
   // ==========================================
-  // ELEVENLABS BROWSER PLAYBACK
+  // RENDER UI
   // ==========================================
-  const playAIVoice = async (text: string) => {
-    if (!text) return;
-    
-    setIsFetchingAudio(true);
-    setIsPlayingAudio(false);
-
-    try {
-      const apiKey = process.env.NEXT_PUBLIC_ELEVENLABS_API_KEY;
-      if (!apiKey) {
-        console.error("ElevenLabs API key missing from frontend (.env.local)");
-        alert("Audio setup incomplete. Missing API Key.");
-        return;
-      }
-
-      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM`, {
-        method: 'POST',
-        headers: {
-          'Accept': 'audio/mpeg',
-          'xi-api-key': apiKey,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          text: text,
-          model_id: "eleven_turbo_v2",
-        })
-      });
-
-      if (response.ok) {
-        const audioBlob = await response.blob();
-        const audioUrl = URL.createObjectURL(audioBlob);
-        const audio = new Audio(audioUrl);
-        
-        audio.onplay = () => setIsPlayingAudio(true);
-        audio.onended = () => setIsPlayingAudio(false);
-        audio.onerror = () => setIsPlayingAudio(false);
-        
-        await audio.play();
-      } else {
-        console.error("ElevenLabs API returned an error:", response.status);
-      }
-    } catch (err) {
-      console.error("TTS Playback Failed:", err);
-    } finally {
-      setIsFetchingAudio(false);
-    }
-  };
-
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    router.replace('/auth');
-  };
-
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#020617] flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-16 h-16 border-4 border-cyan-500/20 border-t-cyan-500 rounded-full animate-spin mb-4 mx-auto"></div>
-          <p className="text-cyan-500 font-black tracking-widest text-[10px] uppercase animate-pulse">
-            Establishing Secure Link...
-          </p>
+      <div className="min-h-screen bg-black flex items-center justify-center">
+        <div className="text-cyan-500 font-mono tracking-widest animate-pulse">
+          INITIALIZING A.S.T.R.A LINK...
         </div>
       </div>
     );
   }
 
-  if (!session) return null;
-
   return (
-    <main className="min-h-screen bg-slate-50 p-4 md:p-8 selection:bg-green-100">
-      <div className="max-w-7xl mx-auto">
-
-        {/* --- HEADER SECTION --- */}
-        <div className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-6">
+    <main className="min-h-screen bg-black text-white p-8 font-sans selection:bg-cyan-900">
+      <div className="max-w-6xl mx-auto space-y-8">
+        
+        {/* HEADER */}
+        <header className="flex justify-between items-end border-b border-slate-800 pb-6">
           <div>
-            <h1 className="text-4xl font-black text-slate-900 tracking-tight">
-              Welcome, <span className="text-green-600">{accountName}</span>
+            <h1 className="text-4xl font-black tracking-tighter bg-gradient-to-r from-cyan-400 to-blue-600 bg-clip-text text-transparent">
+              A.S.T.R.A
             </h1>
-            <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.2em] mt-2">
-              <span className="inline-block w-2 h-2 rounded-full bg-green-500 animate-pulse mr-2"></span>
-              A.S.T.R.A Bio-Telemetry Online
+            <p className="text-slate-500 text-sm font-bold tracking-widest mt-1 uppercase">
+              Medical Telemetry Dashboard
             </p>
           </div>
-
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-4 bg-white p-4 rounded-3xl shadow-sm border border-slate-200 hidden md:flex">
-              <div className="w-12 h-12 bg-green-600 rounded-2xl flex items-center justify-center shadow-lg shadow-green-600/20">
-                <i className="fas fa-microchip text-white text-xl"></i>
-              </div>
-              <div>
-                <h2 className="text-xl font-black text-slate-900 leading-tight tracking-tighter">A.S.T.R.A</h2>
-                <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">v2.0 Flash Core</p>
-              </div>
-            </div>
-
-            <button 
-              onClick={handleLogout}
-              className="flex items-center gap-3 bg-red-600 hover:bg-red-500 text-white p-4 md:px-6 md:py-4 rounded-3xl shadow-lg shadow-red-600/30 transition-all active:scale-95 border border-red-500/50"
-            >
-              <i className="fas fa-power-off text-lg"></i>
-              <span className="font-black text-[10px] uppercase tracking-[0.2em] hidden sm:block">Terminate</span>
-            </button>
+          <div className="text-right">
+            <p className="text-slate-400 text-xs tracking-widest uppercase mb-1">Active Session</p>
+            <p className="font-mono text-cyan-400">{accountName}</p>
           </div>
-        </div>
+        </header>
 
-        {/* --- LIVE VITALS GRID --- */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <StatCard icon="❤️" title="Heart Rate" value={latestData ? Number(latestData.bpm).toString() : "--"} unit="bpm" color="bg-red-50" textColor="text-red-600" pulse={true} />
-          <StatCard icon="🌡️" title="Body Temp" value={latestData ? Number(latestData.temperature).toFixed(1) : "--"} unit="°C" color="bg-orange-50" textColor="text-orange-600" />
-          <StatCard icon="💧" title="Blood Oxygen" value={latestData ? Number(latestData.spo2).toString() : "--"} unit="%" color="bg-blue-50" textColor="text-blue-600" />
-        </div>
-
-        {/* Main Interface Content */}
+        {/* MAIN CONTENT */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          <div className="lg:col-span-2">
-            <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-200 p-8 md:p-10 relative overflow-hidden h-full flex flex-col justify-between">
-               <div>
-                 <div className="absolute top-0 right-0 p-6">
-                    <span className="flex h-3 w-3">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
-                    </span>
-                 </div>
-                 
-                 <div className="flex items-center justify-between mb-6">
-                   <h2 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em]">Medical AI Insights (Gemini 2.0)</h2>
-                   
-                   {/* DYNAMIC AUDIO PLAYBACK BUTTON */}
-                   {latestData?.ai_response && (
-                     <button 
-                       onClick={() => playAIVoice(latestData.ai_response)}
-                       disabled={isFetchingAudio || isPlayingAudio}
-                       className={`flex items-center gap-2 px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest transition-all ${
-                         isPlayingAudio ? 'bg-green-100 text-green-600' : 
-                         isFetchingAudio ? 'bg-cyan-100 text-cyan-600 animate-pulse' : 
-                         'bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-slate-800 active:scale-95'
-                       }`}
-                     >
-                       {isFetchingAudio ? (
-                         <><i className="fas fa-spinner fa-spin"></i> Synthesizing...</>
-                       ) : isPlayingAudio ? (
-                         <><i className="fas fa-volume-up animate-pulse"></i> Playing Audio...</>
-                       ) : (
-                         <><i className="fas fa-play"></i> Listen</>
-                       )}
-                     </button>
-                   )}
-                 </div>
+          
+          {/* VITALS COLUMN (Left) */}
+          <div className="lg:col-span-2 space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <StatCard 
+                icon="🌡️" 
+                title="Temperature" 
+                value={latestData?.temperature || "--"} 
+                unit="°C" 
+                color="bg-slate-900" 
+                textColor="text-yellow-400" 
+              />
+              <StatCard 
+                icon="❤️" 
+                title="Heart Rate" 
+                value={latestData?.bpm || "--"} 
+                unit="BPM" 
+                color="bg-slate-900" 
+                textColor="text-red-400"
+                pulse={true} 
+              />
+              <StatCard 
+                icon="💨" 
+                title="Blood Oxygen" 
+                value={latestData?.spo2 || "--"} 
+                unit="%" 
+                color="bg-slate-900" 
+                textColor="text-cyan-400" 
+              />
+            </div>
 
-                 <div className="min-h-[120px] flex flex-col justify-center">
-                   {latestData ? (
-                     <p className="text-2xl font-bold text-slate-800 leading-relaxed italic">"{latestData.ai_response}"</p>
-                   ) : (
-                     <p className="text-xl font-bold text-slate-300 italic animate-pulse">Waiting for hardware telemetry...</p>
-                   )}
-                 </div>
-               </div>
-
-               <div className="mt-8 pt-8 border-t border-slate-100 flex flex-wrap items-center justify-between gap-4">
-                 <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center">
-                      <i className="fas fa-user text-slate-400 text-xs"></i>
-                    </div>
-                    <span className="text-[11px] font-black text-slate-900 uppercase tracking-widest">
-                      Subject: {latestData?.identified_name || "Unknown"}
-                    </span>
-                 </div>
-                 <span className="text-[10px] font-bold text-slate-400">
-                   {latestData ? `Last Updated: ${new Date(latestData.created_at).toLocaleTimeString()}` : "System Ready"}
-                 </span>
-               </div>
+            {/* AI DIAGNOSIS PANEL */}
+            <div className="bg-slate-900 rounded-[2rem] p-8 border border-slate-800 relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-2 h-full bg-gradient-to-b from-cyan-500 to-blue-600"></div>
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-sm font-black text-slate-400 uppercase tracking-[0.2em]">
+                  Gemini AI Analysis
+                </h2>
+                {isPlayingAudio && (
+                  <span className="flex items-center text-xs font-bold text-cyan-400 uppercase tracking-widest animate-pulse">
+                    <span className="w-2 h-2 rounded-full bg-cyan-400 mr-2"></span>
+                    Speaking...
+                  </span>
+                )}
+              </div>
+              
+              <p className="text-2xl leading-relaxed text-slate-200 font-light">
+                {latestData?.ai_response || "Waiting for patient telemetry..."}
+              </p>
+              
+              <div className="mt-8 pt-6 border-t border-slate-800 flex justify-between items-center">
+                <div>
+                  <p className="text-xs text-slate-500 uppercase tracking-widest">Identified Patient</p>
+                  <p className="text-lg font-bold text-cyan-400">{latestData?.identified_name || "Unknown"}</p>
+                </div>
+                <button 
+                  onClick={() => playDiagnosisAudio(latestData?.ai_response || "")}
+                  className="px-6 py-2 rounded-full bg-slate-800 hover:bg-slate-700 text-xs font-bold uppercase tracking-widest transition-colors"
+                >
+                  ▶ Replay Audio
+                </button>
+              </div>
             </div>
           </div>
 
+          {/* SYSTEM STATUS COLUMN (Right) */}
           <div className="space-y-6">
-            <div className="bg-[#0f172a] rounded-[2.5rem] p-8 text-white shadow-2xl">
-              <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-8 text-center">System Control</h2>
+            <div className="bg-slate-900 rounded-[2rem] p-8 border border-slate-800">
+              <h2 className="text-sm font-black text-slate-400 uppercase tracking-[0.2em] mb-6">System Status</h2>
+              
               <div className="space-y-4">
                  <button 
-                   onClick={fetchLatestVitals}
+                   onClick={fetchLatestData}
                    disabled={isRefreshing}
-                   className="w-full py-4 bg-cyan-600 hover:bg-cyan-500 disabled:bg-cyan-800 rounded-2xl font-black text-[10px] uppercase tracking-[0.2em] transition-all shadow-lg shadow-cyan-900/20 active:scale-95 flex items-center justify-center gap-2"
+                   className="w-full py-4 rounded-xl bg-cyan-900/30 hover:bg-cyan-900/50 text-cyan-400 border border-cyan-800/50 text-xs font-black uppercase tracking-widest transition-all disabled:opacity-50"
                  >
-                   {isRefreshing ? (
-                     <><i className="fas fa-spinner fa-spin"></i> Syncing...</>
-                   ) : (
-                     <><i className="fas fa-sync-alt"></i> Sync Latest Scan</>
-                   )}
+                   {isRefreshing ? "Syncing..." : "Manual Sync"}
                  </button>
 
                  <div className="mt-6 pt-6 border-t border-slate-800">
                     <div className="flex justify-between items-center text-[10px] font-bold">
                        <span className="text-slate-500 uppercase tracking-widest">ESP32 Status</span>
-                       <span className="text-green-500 uppercase tracking-widest">Live Listening</span>
+                       <span className="text-green-500 uppercase tracking-widest flex items-center">
+                         <span className="w-1.5 h-1.5 rounded-full bg-green-500 mr-2 animate-pulse"></span>
+                         Live Listening
+                       </span>
+                    </div>
+                    <div className="flex justify-between items-center text-[10px] font-bold mt-3">
+                       <span className="text-slate-500 uppercase tracking-widest">Last Update</span>
+                       <span className="text-slate-300">
+                         {latestData?.created_at ? new Date(latestData.created_at).toLocaleTimeString() : "--:--"}
+                       </span>
                     </div>
                  </div>
               </div>
@@ -310,15 +253,20 @@ export default function AstraDashboard() {
   );
 }
 
+// ==========================================
+// REUSABLE CARD COMPONENT
+// ==========================================
 function StatCard({ icon, title, value, unit, color, textColor, pulse = false }: any) {
   return (
-    <div className={`${color} rounded-[2rem] p-8 border border-slate-100 transition-all hover:shadow-md hover:-translate-y-1`}>
+    <div className={`${color} rounded-[2rem] p-8 border border-slate-800 transition-all hover:border-slate-700`}>
       <div className="flex items-center justify-between mb-6">
         <span className="text-4xl filter drop-shadow-sm">{icon}</span>
         <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">{title}</span>
       </div>
       <div className="flex items-baseline">
-        <span className={`text-5xl font-black ${textColor} tracking-tighter ${pulse ? 'animate-pulse' : ''}`}>{value}</span>
+        <span className={`text-5xl font-black ${textColor} tracking-tighter ${pulse ? 'animate-pulse' : ''}`}>
+          {value}
+        </span>
         <span className={`${textColor} text-sm font-black ml-2 uppercase tracking-widest`}>{unit}</span>
       </div>
     </div>
