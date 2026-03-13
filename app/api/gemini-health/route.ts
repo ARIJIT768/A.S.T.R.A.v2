@@ -3,7 +3,6 @@ import { createClient } from '@supabase/supabase-js';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
 // 1. INITIALIZE CLIENTS
-// Using the Service Role Key bypasses RLS so the ESP32 can save data without "logging in"
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -11,7 +10,7 @@ const supabaseAdmin = createClient(
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
-// WAV Header Helper: Converts raw 8kHz PCM from ESP32 into a format Gemini can "hear"
+// WAV Header Helper
 function createWavHeader(dataLength: number, sampleRate = 8000) {
   const header = Buffer.alloc(44);
   header.write('RIFF', 0);
@@ -30,22 +29,45 @@ function createWavHeader(dataLength: number, sampleRate = 8000) {
   return header;
 }
 
+// ==========================================
+// NEW: CORS / PREFLIGHT HANDLER
+// ==========================================
+export async function OPTIONS(request: NextRequest) {
+  return new NextResponse(null, {
+    status: 200,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, X-Device-Id, X-Temp, X-Bpm, X-Spo2',
+    },
+  });
+}
+
+// ==========================================
+// NEW: BROWSER TEST HANDLER
+// ==========================================
+export async function GET(request: NextRequest) {
+  return NextResponse.json(
+    { status: "A.S.T.R.A API is ONLINE", message: "Awaiting ESP32 telemetry via POST." }, 
+    { status: 200 }
+  );
+}
+
+// ==========================================
+// MAIN ESP32 POST HANDLER
+// ==========================================
 export async function POST(request: NextRequest) {
   let audioOutputBuffer: Buffer = Buffer.alloc(0);
 
   try {
-    // 2. EXTRACT TELEMETRY FROM ESP32
     const deviceId = request.headers.get('X-Device-Id') || 'ASTRA-DEVICE-01';
     const temp = parseFloat(request.headers.get('X-Temp') || '0');
     const bpm = parseInt(request.headers.get('X-Bpm') || '0');
     const spo2 = parseInt(request.headers.get('X-Spo2') || '0');
 
-    // 3. FETCH REGISTERED USERS
-    // We pass this list to Gemini so it knows who it's talking to
     const { data: allUsers } = await supabaseAdmin.from('users').select('id, name, age, gender');
     const knownUsersString = JSON.stringify(allUsers || []);
 
-    // 4. EXTRACT AUDIO BUFFER
     const rawAudio = await request.arrayBuffer();
     const audioData = Buffer.from(rawAudio);
 
@@ -53,14 +75,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No audio detected from ESP32' }, { status: 400 });
     }
 
-    // Wrap the raw ESP32 audio in a standard WAV header
     const wavHeader = createWavHeader(audioData.length, 8000);
     const audioForGemini = Buffer.concat([wavHeader, audioData]);
 
-    // 5. EXECUTE GEMINI 2.0 FLASH ANALYSIS
     const model = genAI.getGenerativeModel({ 
       model: "gemini-2.0-flash",
-      // Force the AI to output pure JSON so our code doesn't crash parsing text
       generationConfig: { responseMimeType: "application/json" } 
     }); 
 
@@ -89,14 +108,11 @@ export async function POST(request: NextRequest) {
       }
     ]);
 
-    // Safely parse the AI output
     const aiOutput = JSON.parse(result.response.text());
 
-    // 6. DASHBOARD SYNCHRONIZATION (THE MAGIC LINK)
-    // The moment this insert happens, Supabase Realtime pushes it to your Next.js Dashboard
     await supabaseAdmin.from('health_data').insert({
       device_id: deviceId,
-      user_id: aiOutput.identified_user_id || null, // Handles null if user is unknown
+      user_id: aiOutput.identified_user_id || null, 
       temperature: temp,
       bpm: bpm,
       spo2: spo2,
@@ -104,11 +120,9 @@ export async function POST(request: NextRequest) {
       identified_name: aiOutput.identified_name 
     });
 
-    // 7. TEXT-TO-SPEECH (ELEVENLABS)
     const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
 
     if (elevenLabsApiKey) {
-      // Note: pcm_16000 matches standard ESP32 audio buffers. 
       const ttsResponse = await fetch(
         `https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM/stream?output_format=pcm_16000`, 
         {
@@ -128,20 +142,18 @@ export async function POST(request: NextRequest) {
         const arrayBuffer = await ttsResponse.arrayBuffer();
         audioOutputBuffer = Buffer.from(arrayBuffer);
       } else {
-        console.error("ElevenLabs API error. Check your API key or quota.");
-        audioOutputBuffer = Buffer.alloc(1024); // Prevent crash by sending silent buffer
+        audioOutputBuffer = Buffer.alloc(1024); 
       }
     } else {
-      console.warn("No ElevenLabs Key found in .env.local. Sending silent buffer.");
       audioOutputBuffer = Buffer.alloc(1024);
     }
 
-   // 8. SEND AUDIO BACK TO ESP32
     return new NextResponse(new Uint8Array(audioOutputBuffer), {
       status: 200,
       headers: {
         'Content-Type': 'application/octet-stream',
-        'X-Identified-Name': aiOutput.identified_name || 'Patient'
+        'X-Identified-Name': aiOutput.identified_name || 'Patient',
+        'Access-Control-Allow-Origin': '*' // NEW: CORS header added to response
       },
     });
 
