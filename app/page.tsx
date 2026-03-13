@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from 'react';
-import { supabase } from '../utils/supabase'; // Adjust path if needed (e.g., '../utils/supabase')
+import { supabase } from '../utils/supabase'; // Adjust path if needed
 import { useRouter } from 'next/navigation';
 
 interface HealthData {
@@ -17,6 +17,9 @@ export default function AstraDashboard() {
   const [latestData, setLatestData] = useState<HealthData | null>(null);
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState<any>(null);
+  
+  // NEW: State to hold the logged-in user's name
+  const [accountName, setAccountName] = useState("Patient"); 
   const router = useRouter();
 
   useEffect(() => {
@@ -29,7 +32,6 @@ export default function AstraDashboard() {
       if (!currentSession) {
         if (isMounted) {
           setLoading(false);
-          // CRITICAL FIX: Use replace instead of push to prevent history loops
           router.replace('/auth'); 
         }
         return;
@@ -37,6 +39,13 @@ export default function AstraDashboard() {
 
       if (isMounted) {
         setSession(currentSession);
+        
+        // Extract the name from the session metadata we saved during signup
+        const displayName = currentSession.user?.user_metadata?.display_name;
+        if (displayName) {
+          setAccountName(displayName);
+        }
+
         await fetchLatestVitals();
         setLoading(false);
       }
@@ -106,7 +115,8 @@ export default function AstraDashboard() {
         <div className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-6">
           <div>
             <h1 className="text-4xl font-black text-slate-900 tracking-tight">
-              Welcome, <span className="text-green-600">{latestData?.identified_name || "Patient"}</span>
+              {/* UPDATED: Now uses the accountName state to greet the logged-in user immediately */}
+              Welcome, <span className="text-green-600">{accountName}</span>
             </h1>
             <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.2em] mt-2">
               <span className="inline-block w-2 h-2 rounded-full bg-green-500 animate-pulse mr-2"></span>
@@ -157,6 +167,7 @@ export default function AstraDashboard() {
                       <i className="fas fa-user text-slate-400 text-xs"></i>
                     </div>
                     <span className="text-[11px] font-black text-slate-900 uppercase tracking-widest">
+                      {/* Notice how this still shows the AI identified name down here */}
                       Subject: {latestData?.identified_name || "Awaiting Identification"}
                     </span>
                  </div>
