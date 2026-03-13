@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from '../utils/supabase'; 
 import { useRouter } from 'next/navigation';
 
@@ -19,8 +19,12 @@ export default function AstraDashboard() {
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [session, setSession] = useState<any>(null);
-  
   const [accountName, setAccountName] = useState("Patient"); 
+  
+  // Audio Playback States
+  const [isFetchingAudio, setIsFetchingAudio] = useState(false);
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  
   const router = useRouter();
 
   useEffect(() => {
@@ -39,11 +43,8 @@ export default function AstraDashboard() {
 
       if (isMounted) {
         setSession(currentSession);
-        
         const displayName = currentSession.user?.user_metadata?.display_name;
-        if (displayName) {
-          setAccountName(displayName);
-        }
+        if (displayName) setAccountName(displayName);
 
         await fetchLatestVitals();
         setLoading(false);
@@ -62,6 +63,13 @@ export default function AstraDashboard() {
           if (payload.new && isMounted) {
             console.log("Realtime Update Received:", payload.new);
             setLatestData(payload.new as HealthData);
+            
+            // Attempt to auto-play the new response
+            if (payload.new.ai_response) {
+               playAIVoice(payload.new.ai_response).catch((e) => {
+                 console.warn("Browser blocked autoplay. User must click play.", e);
+               });
+            }
           }
         }
       )
@@ -94,6 +102,56 @@ export default function AstraDashboard() {
       setIsRefreshing(false);
     }
   }
+
+  // ==========================================
+  // ELEVENLABS BROWSER PLAYBACK
+  // ==========================================
+  const playAIVoice = async (text: string) => {
+    if (!text) return;
+    
+    setIsFetchingAudio(true);
+    setIsPlayingAudio(false);
+
+    try {
+      const apiKey = process.env.NEXT_PUBLIC_ELEVENLABS_API_KEY;
+      if (!apiKey) {
+        console.error("ElevenLabs API key missing from frontend (.env.local)");
+        alert("Audio setup incomplete. Missing API Key.");
+        return;
+      }
+
+      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM`, {
+        method: 'POST',
+        headers: {
+          'Accept': 'audio/mpeg',
+          'xi-api-key': apiKey,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          text: text,
+          model_id: "eleven_turbo_v2",
+        })
+      });
+
+      if (response.ok) {
+        const audioBlob = await response.blob();
+        const audioUrl = URL.createObjectURL(audioBlob);
+        const audio = new Audio(audioUrl);
+        
+        audio.onplay = () => setIsPlayingAudio(true);
+        audio.onended = () => setIsPlayingAudio(false);
+        audio.onerror = () => setIsPlayingAudio(false);
+        
+        await audio.play();
+      } else {
+        console.error("ElevenLabs API returned an error:", response.status);
+      }
+    } catch (err) {
+      console.error("TTS Playback Failed:", err);
+    } finally {
+      setIsFetchingAudio(false);
+    }
+  };
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -131,7 +189,6 @@ export default function AstraDashboard() {
             </p>
           </div>
 
-          {/* TOP RIGHT CONTROLS */}
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-4 bg-white p-4 rounded-3xl shadow-sm border border-slate-200 hidden md:flex">
               <div className="w-12 h-12 bg-green-600 rounded-2xl flex items-center justify-center shadow-lg shadow-green-600/20">
@@ -146,68 +203,66 @@ export default function AstraDashboard() {
             <button 
               onClick={handleLogout}
               className="flex items-center gap-3 bg-red-600 hover:bg-red-500 text-white p-4 md:px-6 md:py-4 rounded-3xl shadow-lg shadow-red-600/30 transition-all active:scale-95 border border-red-500/50"
-              title="Terminate Session"
             >
               <i className="fas fa-power-off text-lg"></i>
-              <span className="font-black text-[10px] uppercase tracking-[0.2em] hidden sm:block">
-                Terminate
-              </span>
+              <span className="font-black text-[10px] uppercase tracking-[0.2em] hidden sm:block">Terminate</span>
             </button>
           </div>
         </div>
 
         {/* --- LIVE VITALS GRID --- */}
-        {/* We use Number() wrapper to ensure strings from the database don't crash the .toFixed() method */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <StatCard 
-            icon="❤️" 
-            title="Heart Rate" 
-            value={latestData ? Number(latestData.bpm).toString() : "--"} 
-            unit="bpm" 
-            status="Pulse Sensor" 
-            color="bg-red-50" 
-            textColor="text-red-600" 
-            pulse={true} 
-          />
-          <StatCard 
-            icon="🌡️" 
-            title="Body Temp" 
-            value={latestData ? Number(latestData.temperature).toFixed(1) : "--"} 
-            unit="°C" 
-            status="IR Thermal" 
-            color="bg-orange-50" 
-            textColor="text-orange-600" 
-          />
-          <StatCard 
-            icon="💧" 
-            title="Blood Oxygen" 
-            value={latestData ? Number(latestData.spo2).toString() : "--"} 
-            unit="%" 
-            status="SpO2 Saturation" 
-            color="bg-blue-50" 
-            textColor="text-blue-600" 
-          />
+          <StatCard icon="❤️" title="Heart Rate" value={latestData ? Number(latestData.bpm).toString() : "--"} unit="bpm" color="bg-red-50" textColor="text-red-600" pulse={true} />
+          <StatCard icon="🌡️" title="Body Temp" value={latestData ? Number(latestData.temperature).toFixed(1) : "--"} unit="°C" color="bg-orange-50" textColor="text-orange-600" />
+          <StatCard icon="💧" title="Blood Oxygen" value={latestData ? Number(latestData.spo2).toString() : "--"} unit="%" color="bg-blue-50" textColor="text-blue-600" />
         </div>
 
         {/* Main Interface Content */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          
           <div className="lg:col-span-2">
-            <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-200 p-8 md:p-10 relative overflow-hidden h-full">
-               <div className="absolute top-0 right-0 p-6">
-                  <span className="flex h-3 w-3">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
-                  </span>
+            <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-200 p-8 md:p-10 relative overflow-hidden h-full flex flex-col justify-between">
+               <div>
+                 <div className="absolute top-0 right-0 p-6">
+                    <span className="flex h-3 w-3">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+                    </span>
+                 </div>
+                 
+                 <div className="flex items-center justify-between mb-6">
+                   <h2 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em]">Medical AI Insights (Gemini 2.0)</h2>
+                   
+                   {/* DYNAMIC AUDIO PLAYBACK BUTTON */}
+                   {latestData?.ai_response && (
+                     <button 
+                       onClick={() => playAIVoice(latestData.ai_response)}
+                       disabled={isFetchingAudio || isPlayingAudio}
+                       className={`flex items-center gap-2 px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest transition-all ${
+                         isPlayingAudio ? 'bg-green-100 text-green-600' : 
+                         isFetchingAudio ? 'bg-cyan-100 text-cyan-600 animate-pulse' : 
+                         'bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-slate-800 active:scale-95'
+                       }`}
+                     >
+                       {isFetchingAudio ? (
+                         <><i className="fas fa-spinner fa-spin"></i> Synthesizing...</>
+                       ) : isPlayingAudio ? (
+                         <><i className="fas fa-volume-up animate-pulse"></i> Playing Audio...</>
+                       ) : (
+                         <><i className="fas fa-play"></i> Listen</>
+                       )}
+                     </button>
+                   )}
+                 </div>
+
+                 <div className="min-h-[120px] flex flex-col justify-center">
+                   {latestData ? (
+                     <p className="text-2xl font-bold text-slate-800 leading-relaxed italic">"{latestData.ai_response}"</p>
+                   ) : (
+                     <p className="text-xl font-bold text-slate-300 italic animate-pulse">Waiting for hardware telemetry...</p>
+                   )}
+                 </div>
                </div>
-               <h2 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em] mb-6">Medical AI Insights (Gemini 2.0)</h2>
-               <div className="min-h-[150px] flex flex-col justify-center">
-                 {latestData ? (
-                   <p className="text-2xl font-bold text-slate-800 leading-relaxed italic">"{latestData.ai_response}"</p>
-                 ) : (
-                   <p className="text-xl font-bold text-slate-300 italic animate-pulse">Waiting for hardware telemetry...</p>
-                 )}
-               </div>
+
                <div className="mt-8 pt-8 border-t border-slate-100 flex flex-wrap items-center justify-between gap-4">
                  <div className="flex items-center gap-3">
                     <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center">
@@ -228,8 +283,6 @@ export default function AstraDashboard() {
             <div className="bg-[#0f172a] rounded-[2.5rem] p-8 text-white shadow-2xl">
               <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-8 text-center">System Control</h2>
               <div className="space-y-4">
-                 
-                 {/* NEW MANUAL SYNC BUTTON */}
                  <button 
                    onClick={fetchLatestVitals}
                    disabled={isRefreshing}
@@ -257,7 +310,7 @@ export default function AstraDashboard() {
   );
 }
 
-function StatCard({ icon, title, value, unit, status, color, textColor, pulse = false }: any) {
+function StatCard({ icon, title, value, unit, color, textColor, pulse = false }: any) {
   return (
     <div className={`${color} rounded-[2rem] p-8 border border-slate-100 transition-all hover:shadow-md hover:-translate-y-1`}>
       <div className="flex items-center justify-between mb-6">

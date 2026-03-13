@@ -30,7 +30,7 @@ function createWavHeader(dataLength: number, sampleRate = 8000) {
 }
 
 // ==========================================
-// NEW: CORS / PREFLIGHT HANDLER
+// CORS / PREFLIGHT HANDLER
 // ==========================================
 export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, {
@@ -44,7 +44,7 @@ export async function OPTIONS(request: NextRequest) {
 }
 
 // ==========================================
-// NEW: BROWSER TEST HANDLER
+// BROWSER TEST HANDLER
 // ==========================================
 export async function GET(request: NextRequest) {
   return NextResponse.json(
@@ -57,8 +57,6 @@ export async function GET(request: NextRequest) {
 // MAIN ESP32 POST HANDLER
 // ==========================================
 export async function POST(request: NextRequest) {
-  let audioOutputBuffer: Buffer = Buffer.alloc(0);
-
   try {
     const deviceId = request.headers.get('X-Device-Id') || 'ASTRA-DEVICE-01';
     const temp = parseFloat(request.headers.get('X-Temp') || '0');
@@ -110,6 +108,7 @@ export async function POST(request: NextRequest) {
 
     const aiOutput = JSON.parse(result.response.text());
 
+    // Save to Database (Triggers the Dashboard instantly)
     await supabaseAdmin.from('health_data').insert({
       device_id: deviceId,
       user_id: aiOutput.identified_user_id || null, 
@@ -120,41 +119,16 @@ export async function POST(request: NextRequest) {
       identified_name: aiOutput.identified_name 
     });
 
-    const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
-
-    if (elevenLabsApiKey) {
-      const ttsResponse = await fetch(
-        `https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM/stream?output_format=pcm_16000`, 
-        {
-          method: 'POST',
-          headers: { 
-            'xi-api-key': elevenLabsApiKey,
-            'Content-Type': 'application/json' 
-          },
-          body: JSON.stringify({
-            text: aiOutput.ai_response,
-            model_id: "eleven_turbo_v2", 
-          })
-        }
-      );
-
-      if (ttsResponse.ok) {
-        const arrayBuffer = await ttsResponse.arrayBuffer();
-        audioOutputBuffer = Buffer.from(arrayBuffer);
-      } else {
-        audioOutputBuffer = Buffer.alloc(1024); 
-      }
-    } else {
-      audioOutputBuffer = Buffer.alloc(1024);
-    }
-
-    return new NextResponse(new Uint8Array(audioOutputBuffer), {
+    // Return a lightweight success message to the ESP32 so it can finish its loop quickly
+    return NextResponse.json({ 
+      status: "Success", 
+      message: "Data saved to dashboard.",
+      identified_name: aiOutput.identified_name
+    }, { 
       status: 200,
       headers: {
-        'Content-Type': 'application/octet-stream',
-        'X-Identified-Name': aiOutput.identified_name || 'Patient',
-        'Access-Control-Allow-Origin': '*' // NEW: CORS header added to response
-      },
+        'Access-Control-Allow-Origin': '*'
+      } 
     });
 
   } catch (error) {
