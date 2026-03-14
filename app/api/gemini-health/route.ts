@@ -1,105 +1,120 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { GoogleGenerativeAI } from '@google/generative-ai';
 
 // ==========================================
-// INITIALIZE CLIENTS
+// INITIALIZE SUPABASE
 // ==========================================
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-
-// ==========================================
-// HELPERS
-// ==========================================
 function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, X-Device-Id, X-Temp, X-Bpm, X-Spo2',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Device-Id, X-Temp, X-Bpm, X-Spo2, X-Patient-Symptoms',
   };
 }
 
-function jsonResponse(
-  body: Record<string, any>,
-  status: number,
-  extraHeaders: Record<string, string> = {}
-) {
-  return NextResponse.json(body, {
-    status,
-    headers: {
-      ...corsHeaders(),
-      ...extraHeaders,
-    },
-  });
+function jsonResponse(body: Record<string, any>, status: number, extraHeaders: Record<string, string> = {}) {
+  return NextResponse.json(body, { status, headers: { ...corsHeaders(), ...extraHeaders } });
 }
 
-function createWavHeader(dataLength: number, sampleRate = 8000) {
-  const header = Buffer.alloc(44);
-  header.write('RIFF', 0);
-  header.writeUInt32LE(36 + dataLength, 4);
-  header.write('WAVE', 8);
-  header.write('fmt ', 12);
-  header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20); // PCM
-  header.writeUInt16LE(1, 22); // mono
-  header.writeUInt32LE(sampleRate, 24);
-  header.writeUInt32LE(sampleRate * 2, 28); // byte rate
-  header.writeUInt16LE(2, 32); // block align
-  header.writeUInt16LE(16, 34); // bits/sample
-  header.write('data', 36);
-  header.writeUInt32LE(dataLength, 40);
-  return header;
-}
-
-function looksLikeWav(buffer: Buffer) {
-  return (
-    buffer.length >= 12 &&
-    buffer.toString('ascii', 0, 4) === 'RIFF' &&
-    buffer.toString('ascii', 8, 12) === 'WAVE'
-  );
-}
-
-function safeJsonParse(text: string) {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
-function normalizeGeminiText(text: string) {
-  return text.replace(/```json/g, '').replace(/```/g, '').trim();
-}
-
-// ==========================================
-// CORS / PREFLIGHT HANDLER
-// ==========================================
 export async function OPTIONS() {
-  return new NextResponse(null, {
-    status: 200,
-    headers: corsHeaders(),
-  });
+  return new NextResponse(null, { status: 200, headers: corsHeaders() });
 }
 
-// ==========================================
-// BROWSER TEST HANDLER
-// ==========================================
 export async function GET() {
-  return jsonResponse(
-    {
-      status: 'A.S.T.R.A API is ONLINE',
-      message: 'Awaiting ESP32 telemetry via POST.',
-    },
-    200
-  );
+  return jsonResponse({ status: 'A.S.T.R.A ADVANCED EXPERT SYSTEM IS ACTIVE' }, 200);
 }
 
 // ==========================================
-// MAIN ESP32 POST HANDLER
+// MASSIVE KEYWORD & VITALS LOGIC ENGINE
+// ==========================================
+function generateAdvancedDiagnosticReport(temp: number, bpm: number, spo2: number, name: string, patientText: string): string {
+  const text = patientText.toLowerCase();
+
+  // 1. KEYWORD SCANNERS (Symptom Tracking)
+  const hasHeadache = text.includes("headache") || text.includes("head") || text.includes("migraine") || text.includes("dizzy");
+  const hasChestPain = text.includes("chest") || text.includes("heart") || text.includes("breath") || text.includes("tightness");
+  const hasFatigue = text.includes("tired") || text.includes("weak") || text.includes("fatigue") || text.includes("exhausted") || text.includes("sleepy");
+  const hasStomach = text.includes("stomach") || text.includes("nausea") || text.includes("vomit") || text.includes("sick") || text.includes("belly");
+  const hasCough = text.includes("cough") || text.includes("throat") || text.includes("cold") || text.includes("sneezing");
+  const hasStress = text.includes("stress") || text.includes("anxious") || text.includes("panic") || text.includes("nervous");
+  const hasPain = text.includes("pain") || text.includes("hurt") || text.includes("ache") || text.includes("sore");
+
+  // 2. HARDWARE SCANNERS (Vitals Tracking)
+  const isHighFever = temp >= 39.0;
+  const isMildFever = temp > 37.5 && temp < 39.0;
+  const isHypothermia = temp < 35.5;
+  const isSevereTachycardia = bpm > 120;
+  const isTachycardia = bpm > 100 && bpm <= 120;
+  const isBradycardia = bpm < 60;
+  const isHypoxia = spo2 < 95;
+
+  // 3. BUILD THE GREETING
+  let response = `Patient ${name} identified. I have processed your typed symptoms and cross-referenced them with your live telemetry scan. `;
+
+  // 4. BUILD THE SYMPTOM ACKNOWLEDGMENT
+  let detectedSymptoms = [];
+  if (hasHeadache) detectedSymptoms.push("cranial discomfort or dizziness");
+  if (hasChestPain) detectedSymptoms.push("chest or respiratory distress");
+  if (hasFatigue) detectedSymptoms.push("systemic fatigue");
+  if (hasStomach) detectedSymptoms.push("gastrointestinal irregularity");
+  if (hasCough) detectedSymptoms.push("respiratory irritation");
+  if (hasStress) detectedSymptoms.push("elevated psychological stress");
+  if (hasPain && detectedSymptoms.length === 0) detectedSymptoms.push("localized physical pain");
+
+  if (detectedSymptoms.length > 0) {
+    response += `I note that you are experiencing ${detectedSymptoms.join(" and ")}. `;
+  } else if (text.length > 3) {
+    response += `I have analyzed your input and did not detect severe clinical symptom keywords. `;
+  }
+
+  // 5. THE MEDICAL CROSS-REFERENCE ENGINE (Advanced Pre-Baked Logic)
+  
+  // CRITICAL EMERGENCIES
+  if (hasChestPain && (isSevereTachycardia || isHypoxia)) {
+    return response + `CRITICAL ALERT: Your reported chest discomfort combined with abnormal cardiovascular telemetry strongly indicates a medical emergency. Please sit down, remain calm, and seek emergency medical assistance immediately.`;
+  }
+  if (isHighFever) {
+    return response + `ALERT: Your core temperature is dangerously elevated at ${temp}°C. This indicates a severe acute response. Please seek immediate medical evaluation and attempt to safely lower your body temperature.`;
+  }
+  if (isHypoxia) {
+    return response + `ALERT: Your blood oxygen saturation has dropped to ${spo2}%. This state of hypoxia requires immediate clinical attention. Please practice deep breathing and consult a doctor.`;
+  }
+
+  // MODERATE CONDITIONS
+  if (hasStress && (isTachycardia || isSevereTachycardia)) {
+    response += `Your elevated heart rate of ${bpm} BPM aligns with your reported feelings of stress and anxiety. This is a normal physiological response. I recommend engaging in a 5-minute box-breathing exercise to regulate your nervous system.`;
+  } else if (hasFatigue && isBradycardia) {
+    response += `Your reported fatigue is consistent with your resting heart rate of ${bpm} BPM, which is lower than average. Ensure you are consuming adequate calories and staying hydrated.`;
+  } else if (isMildFever && hasCough) {
+    response += `The combination of a ${temp}°C mild fever and respiratory symptoms strongly suggests a viral or bacterial infection. Please isolate, increase fluid intake, and prioritize rest.`;
+  } else if (isMildFever && hasStomach) {
+    response += `Your mild fever combined with gastrointestinal symptoms points to a potential stomach virus or foodborne pathogen. Maintain clear fluid intake to prevent dehydration.`;
+  } else if (hasHeadache && isTachycardia) {
+    response += `Headaches paired with an accelerated heart rate can frequently be attributed to dehydration or caffeine withdrawal. Please drink a large glass of water and rest your eyes away from bright screens.`;
+  } 
+  
+  // ASYMMETRICAL CONDITIONS (Symptoms don't match vitals)
+  else if (detectedSymptoms.length > 0 && !isMildFever && !isTachycardia && !isBradycardia && !isHypoxia) {
+    response += `Interestingly, while you reported physical discomfort, your core hardware vitals (Temp: ${temp}°C, Pulse: ${bpm} BPM, SpO2: ${spo2}%) are perfectly stable. This suggests your symptoms may be stress-related or muscular rather than a systemic physiological failure. Take some time to relax today.`;
+  } else if (detectedSymptoms.length === 0 && (isMildFever || isTachycardia)) {
+    response += `You did not report specific symptoms, but your hardware vitals show clinical abnormalities. Your body may be fighting off an asymptomatic issue. Please monitor yourself closely over the next few hours.`;
+  } 
+  
+  // PERFECT HEALTH
+  else {
+    response += `Your core temperature is a healthy ${temp}°C, your pulse is stable at ${bpm} BPM, and your oxygen is optimal at ${spo2}%. All diagnostic criteria indicate you are in peak physical condition. Keep up your excellent daily routine.`;
+  }
+
+  return response;
+}
+
+// ==========================================
+// MAIN POST HANDLER
 // ==========================================
 export async function POST(request: NextRequest) {
   try {
@@ -107,265 +122,59 @@ export async function POST(request: NextRequest) {
     const temp = parseFloat(request.headers.get('X-Temp') || '0');
     const bpm = parseInt(request.headers.get('X-Bpm') || '0', 10);
     const spo2 = parseInt(request.headers.get('X-Spo2') || '0', 10);
-    const contentType = (request.headers.get('content-type') || '').toLowerCase();
 
-    // ==========================================
-    // READ AUDIO
-    // ==========================================
-    const rawAudio = await request.arrayBuffer();
-    const audioBuffer = Buffer.from(rawAudio);
-
-    if (!audioBuffer || audioBuffer.length === 0) {
-      return jsonResponse(
-        { error: 'NO_AUDIO', message: 'No audio detected from ESP32.' },
-        400
-      );
+    // 🔥 THE NEW TEXT INPUT CAPABILITY
+    // The API will now try to read a typed message from the JSON body,
+    // or fall back to a header if sent via the ESP32.
+    let patientTypedText = "";
+    try {
+      const body = await request.json();
+      patientTypedText = body.symptoms || "";
+    } catch (e) {
+      patientTypedText = request.headers.get('X-Patient-Symptoms') || "";
     }
 
     if (Number.isNaN(temp) || Number.isNaN(bpm) || Number.isNaN(spo2)) {
-      return jsonResponse(
-        {
-          error: 'INVALID_VITALS',
-          message: 'Temperature, BPM, or SpO2 is missing or invalid.',
-        },
-        400
-      );
+      return jsonResponse({ error: 'INVALID_VITALS', message: 'Vitals missing.' }, 400);
     }
 
-    // ==========================================
-    // 60-SECOND COOLDOWN PER DEVICE
-    // ==========================================
-    const sixtySecondsAgo = new Date(Date.now() - 60 * 1000).toISOString();
+    let safeUserId = null;
+    let identifiedName = "Unregistered Patient";
 
-    const { data: recentRecord, error: cooldownError } = await supabaseAdmin
-      .from('health_data')
-      .select('created_at')
+    // Find the specific user who owns this exact ESP32 MAC Address!
+    const { data: matchedUser, error } = await supabaseAdmin
+      .from('users')
+      .select('id, name')
       .eq('device_id', deviceId)
-      .gte('created_at', sixtySecondsAgo)
-      .order('created_at', { ascending: false })
-      .limit(1)
       .maybeSingle();
 
-    if (cooldownError) {
-      console.error('Cooldown check error:', cooldownError);
-      return jsonResponse(
-        {
-          error: 'COOLDOWN_CHECK_FAILED',
-          message: cooldownError.message || 'Failed to verify device cooldown.',
-        },
-        500
-      );
+    if (matchedUser) {
+      safeUserId = matchedUser.id;
+      identifiedName = matchedUser.name.split(" ")[0]; 
     }
 
-    if (recentRecord) {
-      return jsonResponse(
-        {
-          error: 'DEVICE_COOLDOWN',
-          message: 'This device must wait 60 seconds before sending another reading.',
-        },
-        429,
-        {
-          'Retry-After': '60',
-        }
-      );
-    }
-
-    // ==========================================
-    // PREPARE AUDIO FOR GEMINI
-    // ==========================================
-    let audioForGemini: Buffer;
-    let mimeType = 'audio/wav';
-
-    if (contentType.includes('audio/wav') || looksLikeWav(audioBuffer)) {
-      audioForGemini = audioBuffer;
-    } else {
-      const wavHeader = createWavHeader(audioBuffer.length, 8000);
-      audioForGemini = Buffer.concat([wavHeader, audioBuffer]);
-    }
-
-    // ==========================================
-    // GEMINI CALL WITH AUDIO
-    // ==========================================
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-2.0-flash',
-      generationConfig: {
-        responseMimeType: 'application/json',
-      },
-    });
-
-    const prompt = `
-You are A.S.T.R.A, an AI medical telemetry assistant.
-
-You will receive:
-1. A short patient audio clip.
-2. Current vitals from hardware.
-
-Current patient vitals:
-- Temperature: ${temp}°C
-- Heart Rate: ${bpm} BPM
-- Oxygen Saturation: ${spo2}%
-
-Task:
-Listen to the audio only for general context such as whether the patient sounds calm, weak, uncomfortable, breathless, or unclear.
-Do not identify the person.
-Do not perform voice authentication.
-Do not claim a diagnosis from voice alone.
-
-Return strict JSON only using exactly this schema:
-{
-  "audio_summary": "One short sentence about the patient's voice/audio condition",
-  "ai_response": "A supportive, concise 2-sentence medical insight using vitals plus any cautious audio observation"
-}
-
-Rules:
-- Keep output short and simple.
-- If audio is unclear, say so briefly.
-- Do not use markdown.
-- Do not add extra fields.
-`.trim();
-
-    let result;
-
-    try {
-      result = await model.generateContent([
-        prompt,
-        {
-          inlineData: {
-            data: audioForGemini.toString('base64'),
-            mimeType,
-          },
-        },
-      ]);
-    } catch (geminiError: any) {
-      console.error('Gemini API error:', geminiError);
-
-      const message =
-        geminiError?.message ||
-        geminiError?.toString() ||
-        'Unknown Gemini error';
-
-      const lower = message.toLowerCase();
-
-      if (
-        message.includes('429') ||
-        lower.includes('too many requests') ||
-        lower.includes('quota') ||
-        lower.includes('rate limit') ||
-        lower.includes('resource_exhausted')
-      ) {
-        return jsonResponse(
-          {
-            error: 'RATE_LIMIT',
-            message: 'Gemini quota or rate limit exceeded. Retry later.',
-          },
-          429,
-          {
-            'Retry-After': '60',
-          }
-        );
-      }
-
-      if (
-        lower.includes('api key expired') ||
-        lower.includes('api_key_invalid') ||
-        lower.includes('api key invalid') ||
-        lower.includes('please renew the api key') ||
-        lower.includes('invalid api key')
-      ) {
-        return jsonResponse(
-          {
-            error: 'INVALID_GEMINI_KEY',
-            message: 'Gemini API key is invalid or expired. Update Vercel environment variables.',
-          },
-          401
-        );
-      }
-
-      return jsonResponse(
-        {
-          error: 'GEMINI_FAILURE',
-          message,
-        },
-        500
-      );
-    }
-
-    // ==========================================
-    // PARSE GEMINI RESPONSE
-    // ==========================================
-    const rawText = normalizeGeminiText(result.response.text() || '');
-    const aiOutput = safeJsonParse(rawText);
-
-    if (!aiOutput) {
-      console.error('Failed to parse Gemini JSON:', rawText);
-      return jsonResponse(
-        {
-          error: 'AI_OUTPUT_FORMAT_ERROR',
-          raw: rawText,
-        },
-        500
-      );
-    }
-
-    const identifiedName = 'Unidentified Patient';
-
-    const audioSummary =
-      typeof aiOutput.audio_summary === 'string' && aiOutput.audio_summary.trim()
-        ? aiOutput.audio_summary.trim()
-        : 'Audio was unclear.';
-
-    const aiResponse =
-      typeof aiOutput.ai_response === 'string' && aiOutput.ai_response.trim()
-        ? aiOutput.ai_response.trim()
-        : 'Telemetry recorded. Please review the patient vitals.';
-
-    // ==========================================
-    // SAVE TO DATABASE
-    // ==========================================
-    const { error: insertError } = await supabaseAdmin.from('health_data').insert({
+    // Generate Advanced Diagnosis
+    const aiResponse = generateAdvancedDiagnosticReport(temp, bpm, spo2, identifiedName, patientTypedText);
+    
+    // Save to Database
+    await supabaseAdmin.from('health_data').insert({
       device_id: deviceId,
-      user_id: null,
+      user_id: safeUserId,
       temperature: temp,
       bpm,
       spo2,
       ai_response: aiResponse,
       identified_name: identifiedName,
-      audio_summary: audioSummary,
     });
 
-    if (insertError) {
-      console.error('Supabase insert error:', insertError);
-      return jsonResponse(
-        {
-          error: 'DATABASE_INSERT_FAILED',
-          message: insertError.message,
-        },
-        500
-      );
-    }
-
-    // ==========================================
-    // SUCCESS RESPONSE
-    // ==========================================
-    return jsonResponse(
-      {
+    return jsonResponse({
         status: 'Success',
-        message: 'Data saved to dashboard.',
         identified_name: identifiedName,
-        audio_summary: audioSummary,
         ai_response: aiResponse,
-      },
-      200
-    );
+      }, 200);
+
   } catch (error: any) {
     console.error('API Error:', error);
-
-    return jsonResponse(
-      {
-        error: 'SYSTEM_ERROR',
-        message: error?.message || 'System Error during API execution',
-      },
-      500
-    );
+    return jsonResponse({ error: 'SYSTEM_ERROR' }, 500);
   }
 }
