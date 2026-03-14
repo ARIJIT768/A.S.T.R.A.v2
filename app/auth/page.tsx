@@ -1,223 +1,224 @@
 "use client";
 
-import React, { useEffect, useState, useRef } from 'react';
-import { supabase } from '../../utils/supabase'; 
+import { useState, useEffect } from 'react';
+import { supabase } from '../../utils/supabase'; // Verify this path matches your root utils folder
 import { useRouter } from 'next/navigation';
 
-interface HealthData {
-  id: string;
-  temperature: number;
-  bpm: number;
-  spo2: number;
-  ai_response: string;
-  identified_name: string;
-  created_at: string;
-}
-
-export default function AstraDashboard() {
-  const [history, setHistory] = useState<HealthData[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [accountName, setAccountName] = useState("Patient"); 
-  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+export default function MasterAuth() {
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const latestData = history[0] || null;
+  // OTP Logic State
+  const [isOtpSent, setIsOtpSent] = useState(false);
+  const [otp, setOtp] = useState('');
+  const [resendTimer, setResendTimer] = useState(0); 
+
+  // UI & Feedback State
+  const [pageLoading, setPageLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
+
   const router = useRouter();
-
-  // ==========================================
-  // FETCH RECENT HISTORY
-  // ==========================================
-  const fetchHistory = async () => {
-    setIsRefreshing(true);
-    const { data } = await supabase
-      .from('health_data')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(15);
-
-    if (data) setHistory(data);
-    setIsRefreshing(false);
-    setLoading(false);
-  };
-
-  // ==========================================
-  // TEXT-TO-SPEECH
-  // ==========================================
-  const playDiagnosisAudio = (text: string) => {
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 1.0; 
-      utterance.pitch = 1.1; 
-      utterance.onstart = () => setIsPlayingAudio(true);
-      utterance.onend = () => setIsPlayingAudio(false);
-      window.speechSynthesis.speak(utterance);
-    }
-  };
 
   useEffect(() => {
     let isMounted = true;
 
-    const init = async () => {
-      // 1. Check for Active Session
+    // Direct session check to prevent logged-in users from seeing this page
+    const checkSession = async () => {
       const { data: { session } } = await supabase.auth.getSession();
-
-      // 2. Mandatory Redirect if Not Authenticated
-      if (!session && isMounted) {
-        router.replace('/auth'); // Redirect to your authentication page
-        return;
-      }
-
-      // 3. Populate Dashboard for Authenticated Users
       if (session && isMounted) {
-        setAccountName(session.user?.user_metadata?.display_name || "Patient");
-        await fetchHistory();
+        router.replace('/dashboard');
+      } else if (isMounted) {
+        setPageLoading(false);
       }
     };
 
-    init();
+    checkSession();
 
-    // 📡 REALTIME LISTENER: Updates UI when ESP32 dumps new data
-    const channel = supabase
-      .channel('live-health-data')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'health_data' }, (payload) => {
-          const newData = payload.new as HealthData;
-          setHistory(prev => [newData, ...prev.slice(0, 14)]);
-          if (newData.ai_response) playDiagnosisAudio(newData.ai_response);
-      }).subscribe();
+    // Listen for the SIGNED_IN event to trigger the dashboard redirect
+    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_IN' && session && isMounted) {
+        setSuccessMsg('Authorization Verified. Linking to A.S.T.R.A Core...');
+        setTimeout(() => { router.replace('/dashboard'); }, 1500);
+      }
+    });
 
-    return () => {
+    return () => { 
       isMounted = false;
-      supabase.removeChannel(channel);
+      authListener.subscription.unsubscribe(); 
     };
   }, [router]);
 
-  if (loading) return (
-    <div className="min-h-screen bg-black flex items-center justify-center font-mono text-cyan-500 animate-pulse">
-      SYNCING A.S.T.R.A TELEMETRY...
-    </div>
-  );
+  // Handle OTP Resend countdown
+  useEffect(() => {
+    let interval: any;
+    if (resendTimer > 0) {
+      interval = setInterval(() => setResendTimer((prev) => prev - 1), 1000);
+    }
+    return () => clearInterval(interval);
+  }, [resendTimer]);
+
+  const handleAuthAction = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setActionLoading(true);
+    setErrorMsg('');
+    setSuccessMsg('');
+
+    try {
+      // 1. Send OTP (Sign up or Sign in)
+      const { error } = await supabase.auth.signInWithOtp({ 
+        email: email.trim().toLowerCase(),
+        options: {
+          shouldCreateUser: isSignUp, 
+          // Maps to 'name' in your users table via SQL trigger
+          data: isSignUp ? { display_name: username.trim() } : undefined
+        }
+      });
+
+      if (error) throw error;
+      
+      setIsOtpSent(true);
+      setResendTimer(60);
+      setSuccessMsg(`Secure code transmitted to ${email}`);
+    } catch (err: any) {
+      setErrorMsg(err.message || "Failed to establish secure link.");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleVerifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setActionLoading(true);
+    setErrorMsg('');
+
+    try {
+      const { data, error } = await supabase.auth.verifyOtp({
+        email: email.trim().toLowerCase(),
+        token: otp.trim(),
+        type: 'email'
+      });
+
+      if (error) throw error;
+
+      // Explicitly redirect on successful verification
+      if (data.session) {
+        setSuccessMsg("Access Granted.");
+        router.replace('/dashboard');
+      }
+    } catch (err: any) {
+      setErrorMsg("Verification Failed: Invalid or expired code.");
+      setOtp(''); 
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  if (pageLoading) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center font-mono text-cyan-500 animate-pulse uppercase tracking-[0.3em]">
+        Authenticating Terminal...
+      </div>
+    );
+  }
 
   return (
-    <main className="min-h-screen bg-black text-white p-6 font-sans selection:bg-cyan-900">
-      <div className="max-w-7xl mx-auto space-y-6">
-        
-        {/* HEADER */}
-        <header className="flex justify-between items-center border-b border-slate-800 pb-6">
-          <div>
-            <h1 className="text-3xl font-black tracking-tighter bg-gradient-to-r from-cyan-400 to-blue-600 bg-clip-text text-transparent uppercase">
-              A.S.T.R.A Dashboard
-            </h1>
-            <p className="text-slate-500 text-[10px] font-bold tracking-[0.3em] uppercase mt-1">Medical Expert System v2.0</p>
-          </div>
-          <div className="flex gap-4 items-center">
-            <div className="text-right mr-4">
-              <p className="text-slate-500 text-[9px] uppercase font-bold tracking-widest">Operator</p>
-              <p className="font-mono text-cyan-400 text-sm tracking-tighter">{accountName}</p>
-            </div>
-            <button 
-              onClick={fetchHistory} 
-              className={`p-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-cyan-500 transition-all ${isRefreshing ? 'animate-spin' : ''}`}
-            >
-              🔄
-            </button>
-            <button 
-              onClick={async () => {
-                await supabase.auth.signOut();
-                router.replace('/auth');
-              }}
-              className="p-2 rounded-lg bg-red-900/20 border border-red-900/50 hover:bg-red-900/40 text-red-400 text-[10px] font-black uppercase tracking-widest transition-all"
-            >
-              Sign Out
-            </button>
-          </div>
-        </header>
+    <div className="min-h-screen bg-black flex flex-col items-center justify-center p-6 font-sans">
+      
+      {/* A.S.T.R.A Branding */}
+      <div className="mb-12 text-center">
+        <h1 className="text-6xl font-black text-white tracking-tighter bg-gradient-to-r from-cyan-400 to-blue-600 bg-clip-text text-transparent uppercase">
+          A.S.T.R.A
+        </h1>
+        <p className="text-slate-500 text-[10px] font-bold tracking-[0.5em] uppercase mt-2">Secure Health Monitoring Portal</p>
+      </div>
 
-        {/* TOP ROW: PRIMARY VITALS GRID */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <StatCard icon="🌡️" title="Temperature" value={latestData?.temperature || "--"} unit="°C" color="text-yellow-400" />
-          <StatCard icon="❤️" title="Heart Rate" value={latestData?.bpm || "--"} unit="BPM" color="text-red-500" pulse={true} />
-          <StatCard icon="💨" title="Blood Oxygen" value={latestData?.spo2 || "--"} unit="%" color="text-cyan-400" />
+      <div className="w-full max-w-md bg-slate-900/50 p-10 rounded-[2.5rem] border border-slate-800 shadow-2xl relative overflow-hidden">
+        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-cyan-500 to-transparent"></div>
+
+        <div className="mb-8">
+          <h2 className="text-sm font-black text-slate-300 uppercase tracking-widest">
+            {isOtpSent ? 'Enter Access Code' : isSignUp ? 'Initialize Registry' : 'Portal Login'}
+          </h2>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 h-[500px]">
-          {/* LEFT: CONVERSATIONAL DIAGNOSTIC INTERFACE */}
-          <div className="lg:col-span-2 flex flex-col bg-slate-900/50 rounded-3xl border border-slate-800 overflow-hidden">
-            <div className="p-4 bg-slate-950/50 border-b border-slate-800 flex justify-between items-center">
-               <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center">
-                 <span className="w-2 h-2 rounded-full bg-green-500 mr-2 animate-pulse"></span>
-                 Diagnostic Chat
-               </h3>
-               {isPlayingAudio && <span className="text-[9px] font-bold text-cyan-500 animate-pulse">AI SPEAKING...</span>}
-            </div>
-            
-            <div className="flex-1 overflow-y-auto p-6 space-y-6 scroll-smooth">
-               {history.length > 0 ? (
-                 history.slice(0, 5).reverse().map((msg) => (
-                    <div key={msg.id} className="flex items-start gap-4 animate-in fade-in slide-in-from-left-4">
-                       <div className="w-8 h-8 rounded-lg bg-cyan-600 flex items-center justify-center text-[10px] font-black">AI</div>
-                       <div className="flex-1">
-                          <div className="bg-slate-800/80 p-4 rounded-2xl rounded-tl-none text-sm font-light leading-relaxed text-slate-200 border border-slate-700/50">
-                            {msg.ai_response}
-                          </div>
-                          <p className="text-[9px] text-slate-500 mt-2 uppercase font-bold tracking-tighter">
-                            {new Date(msg.created_at).toLocaleTimeString()} • Verified Scan for {msg.identified_name}
-                          </p>
-                       </div>
-                    </div>
-                 ))
-               ) : (
-                 <div className="h-full flex items-center justify-center text-slate-600 text-xs font-bold uppercase tracking-widest">
-                   Awaiting System Trigger...
-                 </div>
-               )}
-               <div ref={messagesEndRef} />
-            </div>
-          </div>
+        {errorMsg && <p className="mb-6 p-3 bg-red-900/20 border border-red-900/50 text-red-400 text-[10px] font-bold uppercase tracking-widest text-center rounded-xl">{errorMsg}</p>}
+        {successMsg && <p className="mb-6 p-3 bg-cyan-900/20 border border-cyan-800 text-cyan-400 text-[10px] font-bold uppercase tracking-widest text-center rounded-xl">{successMsg}</p>}
 
-          {/* RIGHT: COMPACT HISTORY LOG */}
-          <div className="bg-slate-900/50 rounded-3xl p-6 border border-slate-800 flex flex-col">
-            <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-6 border-b border-slate-800 pb-4">
-              Telemetry History
-            </h3>
-            <div className="flex-1 overflow-y-auto space-y-3 pr-2 scrollbar-hide">
-              {history.map((entry) => (
-                <div key={entry.id} className="flex items-center justify-between p-3 rounded-xl bg-black/40 border border-slate-800/50 hover:bg-slate-800 transition-all group">
-                  <div>
-                    <p className="text-[9px] font-mono text-slate-500 group-hover:text-cyan-500 transition-colors">
-                      {new Date(entry.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </p>
-                    <p className="text-[11px] font-bold text-slate-300">{entry.bpm} BPM | {entry.spo2}%</p>
-                  </div>
-                  <div className="text-right">
-                    <span className={`text-xs font-black ${entry.temperature > 37.5 ? 'text-red-400' : 'text-green-400'}`}>
-                      {entry.temperature}°C
-                    </span>
-                  </div>
-                </div>
-              ))}
+        {!isOtpSent ? (
+          <form onSubmit={handleAuthAction} className="space-y-6">
+            {isSignUp && (
+              <div className="space-y-2">
+                <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest ml-1">Full Name</label>
+                <input 
+                  type="text" 
+                  placeholder="e.g. Soham"
+                  className="w-full p-4 rounded-xl bg-black border border-slate-800 text-white focus:border-cyan-500 outline-none font-bold text-sm transition-all"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  required
+                />
+              </div>
+            )}
+            <div className="space-y-2">
+              <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest ml-1">Medical Email</label>
+              <input 
+                type="email" 
+                placeholder="name@email.com"
+                className="w-full p-4 rounded-xl bg-black border border-slate-800 text-white focus:border-cyan-500 outline-none font-bold text-sm transition-all"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+              />
             </div>
-          </div>
-        </div>
+            <button 
+              type="submit" 
+              disabled={actionLoading}
+              className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-black py-4 rounded-xl transition-all uppercase tracking-[0.2em] text-xs disabled:opacity-50"
+            >
+              {actionLoading ? 'Initializing...' : 'Send Access Code'}
+            </button>
+          </form>
+        ) : (
+          <form onSubmit={handleVerifyOtp} className="space-y-6 text-center">
+            <input 
+              type="text" 
+              maxLength={6}
+              className="w-full p-4 bg-transparent text-cyan-400 text-5xl font-black tracking-[0.3em] text-center outline-none"
+              placeholder="000000"
+              value={otp}
+              onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
+              autoFocus
+            />
+            <button 
+              type="submit" 
+              disabled={actionLoading || otp.length !== 6}
+              className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-4 rounded-xl transition-all uppercase tracking-[0.2em] text-xs"
+            >
+              {actionLoading ? 'Verifying...' : 'Confirm Identity'}
+            </button>
+            <button 
+              type="button"
+              onClick={() => setIsOtpSent(false)}
+              className="text-[9px] font-black uppercase text-slate-600 hover:text-white transition-colors tracking-widest"
+            >
+              ← Back to Identification
+            </button>
+          </form>
+        )}
       </div>
-    </main>
-  );
-}
 
-function StatCard({ icon, title, value, unit, color, pulse = false }: any) {
-  return (
-    <div className="bg-slate-900/40 rounded-[2.5rem] p-8 border border-slate-800 transition-all hover:border-slate-700 hover:bg-slate-900/60 group">
-      <div className="flex justify-between items-center mb-6">
-        <span className="text-4xl group-hover:scale-110 transition-transform duration-300">{icon}</span>
-        <span className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">{title}</span>
-      </div>
-      <div className="flex items-baseline gap-2">
-        <span className={`text-5xl font-black tracking-tighter ${color} ${pulse ? 'animate-pulse' : ''}`}>
-          {value}
-        </span>
-        <span className="text-xs font-bold text-slate-600 uppercase tracking-widest">{unit}</span>
-      </div>
+      <button 
+        onClick={() => {
+          setIsSignUp(!isSignUp);
+          setErrorMsg(''); 
+        }}
+        className="mt-10 text-[10px] font-black uppercase tracking-[0.3em] text-slate-600 hover:text-cyan-400 transition-all"
+      >
+        {isSignUp ? 'Already Registered? Sign-In' : 'New User? Initialize Profile'}
+      </button>
     </div>
   );
 }
