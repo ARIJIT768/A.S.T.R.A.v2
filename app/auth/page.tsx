@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from 'react';
-import { supabase } from '../../utils/supabase'; // Verify this path matches your root utils folder
+import { supabase } from '../../utils/supabase'; 
 import { useRouter } from 'next/navigation';
 
 export default function MasterAuth() {
@@ -9,12 +9,10 @@ export default function MasterAuth() {
   const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   
-  // OTP Logic State
   const [isOtpSent, setIsOtpSent] = useState(false);
   const [otp, setOtp] = useState('');
   const [resendTimer, setResendTimer] = useState(0); 
 
-  // UI & Feedback State
   const [pageLoading, setPageLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -25,7 +23,6 @@ export default function MasterAuth() {
   useEffect(() => {
     let isMounted = true;
 
-    // Direct session check to prevent logged-in users from seeing this page
     const checkSession = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (session && isMounted) {
@@ -37,7 +34,6 @@ export default function MasterAuth() {
 
     checkSession();
 
-    // Listen for the SIGNED_IN event to trigger the dashboard redirect
     const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_IN' && session && isMounted) {
         setSuccessMsg('Authorization Verified. Linking to A.S.T.R.A Core...');
@@ -51,7 +47,6 @@ export default function MasterAuth() {
     };
   }, [router]);
 
-  // Handle OTP Resend countdown
   useEffect(() => {
     let interval: any;
     if (resendTimer > 0) {
@@ -67,14 +62,18 @@ export default function MasterAuth() {
     setSuccessMsg('');
 
     try {
-      // 1. Send OTP (Sign up or Sign in)
+      // Clean parameter construction to prevent Supabase JS rejection
+      const authOptions: any = {
+        shouldCreateUser: isSignUp,
+      };
+      
+      if (isSignUp) {
+        authOptions.data = { display_name: username.trim() };
+      }
+
       const { error } = await supabase.auth.signInWithOtp({ 
         email: email.trim().toLowerCase(),
-        options: {
-          shouldCreateUser: isSignUp, 
-          // Maps to 'name' in your users table via SQL trigger
-          data: isSignUp ? { display_name: username.trim() } : undefined
-        }
+        options: authOptions
       });
 
       if (error) throw error;
@@ -103,7 +102,6 @@ export default function MasterAuth() {
 
       if (error) throw error;
 
-      // Explicitly redirect on successful verification
       if (data.session) {
         setSuccessMsg("Access Granted.");
         router.replace('/dashboard');
@@ -127,7 +125,6 @@ export default function MasterAuth() {
   return (
     <div className="min-h-screen bg-black flex flex-col items-center justify-center p-6 font-sans">
       
-      {/* A.S.T.R.A Branding */}
       <div className="mb-12 text-center">
         <h1 className="text-6xl font-black text-white tracking-tighter bg-gradient-to-r from-cyan-400 to-blue-600 bg-clip-text text-transparent uppercase">
           A.S.T.R.A
