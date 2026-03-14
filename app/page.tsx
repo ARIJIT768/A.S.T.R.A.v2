@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 
 interface HealthData {
   id: string;
+  user_id: string;
   temperature: number;
   bpm: number;
   spo2: number;
@@ -14,26 +15,110 @@ interface HealthData {
   created_at: string;
 }
 
+// ==========================================
+// MASSIVE KEYWORD & VITALS LOGIC ENGINE
+// ==========================================
+function generateAdvancedDiagnosticReport(temp: number, bpm: number, spo2: number, name: string, patientText: string): string {
+  const text = patientText.toLowerCase();
+
+  // 1. KEYWORD SCANNERS
+  const hasHeadache = text.includes("headache") || text.includes("head") || text.includes("migraine") || text.includes("dizzy");
+  const hasChestPain = text.includes("chest") || text.includes("heart") || text.includes("breath") || text.includes("tightness");
+  const hasFatigue = text.includes("tired") || text.includes("weak") || text.includes("fatigue") || text.includes("exhausted") || text.includes("sleepy");
+  const hasStomach = text.includes("stomach") || text.includes("nausea") || text.includes("vomit") || text.includes("sick") || text.includes("belly");
+  const hasCough = text.includes("cough") || text.includes("throat") || text.includes("cold") || text.includes("sneezing");
+  const hasStress = text.includes("stress") || text.includes("anxious") || text.includes("panic") || text.includes("nervous");
+  const hasPain = text.includes("pain") || text.includes("hurt") || text.includes("ache") || text.includes("sore");
+
+  // 2. HARDWARE SCANNERS
+  const isHighFever = temp >= 39.0;
+  const isMildFever = temp > 37.5 && temp < 39.0;
+  const isHypothermia = temp < 35.5;
+  const isSevereTachycardia = bpm > 120;
+  const isTachycardia = bpm > 100 && bpm <= 120;
+  const isBradycardia = bpm < 60;
+  const isHypoxia = spo2 < 95;
+
+  // 3. BUILD THE GREETING
+  let response = `Patient ${name} identified. I have processed your typed symptoms and cross-referenced them with your live telemetry scan. `;
+
+  // 4. SYMPTOM ACKNOWLEDGMENT
+  let detectedSymptoms = [];
+  if (hasHeadache) detectedSymptoms.push("cranial discomfort or dizziness");
+  if (hasChestPain) detectedSymptoms.push("chest or respiratory distress");
+  if (hasFatigue) detectedSymptoms.push("systemic fatigue");
+  if (hasStomach) detectedSymptoms.push("gastrointestinal irregularity");
+  if (hasCough) detectedSymptoms.push("respiratory irritation");
+  if (hasStress) detectedSymptoms.push("elevated psychological stress");
+  if (hasPain && detectedSymptoms.length === 0) detectedSymptoms.push("localized physical pain");
+
+  if (detectedSymptoms.length > 0) {
+    response += `I note that you are experiencing ${detectedSymptoms.join(" and ")}. `;
+  } else if (text.length > 3) {
+    response += `I have analyzed your input and did not detect severe clinical symptom keywords. `;
+  }
+
+  // 5. THE MEDICAL CROSS-REFERENCE ENGINE
+  if (hasChestPain && (isSevereTachycardia || isHypoxia)) {
+    return response + `CRITICAL ALERT: Your reported chest discomfort combined with abnormal cardiovascular telemetry strongly indicates a medical emergency. Please sit down, remain calm, and seek emergency medical assistance immediately.`;
+  }
+  if (isHighFever) {
+    return response + `ALERT: Your core temperature is dangerously elevated at ${temp}°C. This indicates a severe acute response. Please seek immediate medical evaluation and attempt to safely lower your body temperature.`;
+  }
+  if (isHypoxia) {
+    return response + `ALERT: Your blood oxygen saturation has dropped to ${spo2}%. This state of hypoxia requires immediate clinical attention. Please practice deep breathing and consult a doctor.`;
+  }
+
+  // MODERATE CONDITIONS
+  if (hasStress && (isTachycardia || isSevereTachycardia)) {
+    response += `Your elevated heart rate of ${bpm} BPM aligns with your reported feelings of stress and anxiety. This is a normal physiological response. I recommend engaging in a 5-minute box-breathing exercise to regulate your nervous system.`;
+  } else if (hasFatigue && isBradycardia) {
+    response += `Your reported fatigue is consistent with your resting heart rate of ${bpm} BPM, which is lower than average. Ensure you are consuming adequate calories and staying hydrated.`;
+  } else if (isMildFever && hasCough) {
+    response += `The combination of a ${temp}°C mild fever and respiratory symptoms strongly suggests a viral or bacterial infection. Please isolate, increase fluid intake, and prioritize rest.`;
+  } else if (isMildFever && hasStomach) {
+    response += `Your mild fever combined with gastrointestinal symptoms points to a potential stomach virus or foodborne pathogen. Maintain clear fluid intake to prevent dehydration.`;
+  } else if (hasHeadache && isTachycardia) {
+    response += `Headaches paired with an accelerated heart rate can frequently be attributed to dehydration or caffeine withdrawal. Please drink a large glass of water and rest your eyes away from bright screens.`;
+  } 
+  
+  // ASYMMETRICAL CONDITIONS
+  else if (detectedSymptoms.length > 0 && !isMildFever && !isTachycardia && !isBradycardia && !isHypoxia) {
+    response += `Interestingly, while you reported physical discomfort, your core hardware vitals (Temp: ${temp}°C, Pulse: ${bpm} BPM, SpO2: ${spo2}%) are perfectly stable. This suggests your symptoms may be stress-related or muscular rather than a systemic physiological failure. Take some time to relax today.`;
+  } else if (detectedSymptoms.length === 0 && (isMildFever || isTachycardia)) {
+    response += `You did not report specific symptoms, but your hardware vitals show clinical abnormalities. Your body may be fighting off an asymptomatic issue. Please monitor yourself closely over the next few hours.`;
+  } 
+  
+  // PERFECT HEALTH
+  else {
+    response += `Your core temperature is a healthy ${temp}°C, your pulse is stable at ${bpm} BPM, and your oxygen is optimal at ${spo2}%. All diagnostic criteria indicate you are in peak physical condition. Keep up your excellent daily routine.`;
+  }
+
+  return response;
+}
+
 export default function MasterAstraDashboard() {
   const [history, setHistory] = useState<HealthData[]>([]);
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [accountName, setAccountName] = useState("Patient"); 
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  
+  // Symptom Input State
+  const [symptomInput, setSymptomInput] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const latestData = history[0] || null;
   const router = useRouter();
 
-  // ==========================================
-  // FETCH RECENT HISTORY (DUMPED VALUES)
-  // ==========================================
-  const fetchHistory = async () => {
+  const fetchHistory = async (userId: string) => {
     setIsRefreshing(true);
-    // Fetches the last 15 vitals mapped to the user
     const { data } = await supabase
       .from('health_data')
       .select('*')
+      .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .limit(15);
 
@@ -42,14 +127,11 @@ export default function MasterAstraDashboard() {
     setLoading(false);
   };
 
-  // ==========================================
-  // TEXT-TO-SPEECH (DIAGNOSTIC FEEDBACK)
-  // ==========================================
   const playDiagnosisAudio = (text: string) => {
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 0.95; // Slightly slower for clarity
+      utterance.rate = 0.95; 
       utterance.pitch = 1.0; 
       utterance.onstart = () => setIsPlayingAudio(true);
       utterance.onend = () => setIsPlayingAudio(false);
@@ -57,37 +139,45 @@ export default function MasterAstraDashboard() {
     }
   };
 
-  // ==========================================
-  // INITIALIZATION & PROTECTION LOGIC
-  // ==========================================
   useEffect(() => {
     let isMounted = true;
+    let userId = '';
 
     const initDashboard = async () => {
-      // 1. Mandatory Session Check (Redirection)
       const { data: { session } } = await supabase.auth.getSession();
-
       if (!session && isMounted) {
-        router.replace('/auth'); // Boot out if not signed in
+        router.replace('/auth');
         return;
       }
-
       if (session && isMounted) {
+        userId = session.user.id;
+        setCurrentUserId(userId);
         setAccountName(session.user?.user_metadata?.display_name || "Authorized User");
-        await fetchHistory();
+        await fetchHistory(userId);
       }
     };
 
     initDashboard();
 
-    // 2. Realtime Listener: Maps ESP32 dumps instantly to the screen
+    // 📡 REALTIME LISTENER: Handles both new mappings and AI symptom updates!
     const channel = supabase
       .channel('live-health-data')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'health_data' }, (payload) => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'health_data' }, (payload) => {
           const newData = payload.new as HealthData;
-          // Only show data that has been mapped (contains a name/user_id)
-          if (newData.identified_name) {
-            setHistory(prev => [newData, ...prev.slice(0, 14)]);
+          
+          if (newData.user_id === userId) {
+            setHistory(prev => {
+              // Check if we are updating an existing scan (e.g. typing symptoms)
+              const existingIndex = prev.findIndex(item => item.id === newData.id);
+              if (existingIndex >= 0) {
+                const updatedHistory = [...prev];
+                updatedHistory[existingIndex] = newData;
+                return updatedHistory;
+              } else {
+                // It's a brand new scan mapped by Admin
+                return [newData, ...prev.slice(0, 14)];
+              }
+            });
             if (newData.ai_response) playDiagnosisAudio(newData.ai_response);
           }
       }).subscribe();
@@ -97,6 +187,40 @@ export default function MasterAstraDashboard() {
       supabase.removeChannel(channel);
     };
   }, [router]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [history]);
+
+  // ==========================================
+  // SYMPTOM SUBMISSION HANDLER
+  // ==========================================
+  const handleSymptomSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!symptomInput.trim() || !latestData) return;
+
+    setIsSubmitting(true);
+    
+    // Generate the personalized AI diagnosis on the frontend
+    const updatedAiResponse = generateAdvancedDiagnosticReport(
+      latestData.temperature,
+      latestData.bpm,
+      latestData.spo2,
+      accountName.split(" ")[0], // Use first name
+      symptomInput
+    );
+
+    // Save it to Supabase (which triggers the Realtime listener above to update the UI & play Audio!)
+    const { error } = await supabase
+      .from('health_data')
+      .update({ ai_response: updatedAiResponse })
+      .eq('id', latestData.id);
+
+    if (!error) {
+      setSymptomInput("");
+    }
+    setIsSubmitting(false);
+  };
 
   if (loading) return (
     <div className="min-h-screen bg-black flex flex-col items-center justify-center gap-4 font-mono text-cyan-500 selection:bg-cyan-900">
@@ -117,14 +241,13 @@ export default function MasterAstraDashboard() {
             </h1>
             <p className="text-slate-500 text-[10px] font-bold tracking-[0.3em] uppercase mt-1">Medical Expert Interface v2.5</p>
           </div>
-          
           <div className="flex gap-4 items-center">
             <div className="text-right mr-4">
               <p className="text-slate-500 text-[9px] uppercase font-bold tracking-widest">Profile</p>
               <p className="font-mono text-cyan-400 text-sm tracking-tighter">{accountName}</p>
             </div>
             <button 
-              onClick={fetchHistory} 
+              onClick={() => currentUserId && fetchHistory(currentUserId)} 
               className={`p-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-cyan-500 transition-all ${isRefreshing ? 'animate-spin' : ''}`}
             >
               🔄
@@ -141,30 +264,18 @@ export default function MasterAstraDashboard() {
           </div>
         </header>
 
-        {/* VITALS GRID: DUMPED VALUES MAPPING */}
+        {/* VITALS GRID */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <StatCard 
-            icon="🌡️" title="Temperature" 
-            value={latestData?.temperature || "--"} 
-            unit="°C" color="text-yellow-400" 
-          />
-          <StatCard 
-            icon="❤️" title="Heart Rate" 
-            value={latestData?.bpm || "--"} 
-            unit="BPM" color="text-red-500" pulse={true} 
-          />
-          <StatCard 
-            icon="💨" title="Oxygen Level" 
-            value={latestData?.spo2 || "--"} 
-            unit="%" color="text-cyan-400" 
-          />
+          <StatCard icon="🌡️" title="Temperature" value={latestData?.temperature || "--"} unit="°C" color="text-yellow-400" />
+          <StatCard icon="❤️" title="Heart Rate" value={latestData?.bpm || "--"} unit="BPM" color="text-red-500" pulse={true} />
+          <StatCard icon="💨" title="Oxygen Level" value={latestData?.spo2 || "--"} unit="%" color="text-cyan-400" />
         </div>
 
         {/* MAIN INTERFACE: DIAGNOSTICS & HISTORY */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           
           {/* AI DIAGNOSTIC CHAT FEED */}
-          <div className="lg:col-span-2 flex flex-col bg-slate-900/50 rounded-[2.5rem] border border-slate-800 h-[500px] overflow-hidden">
+          <div className="lg:col-span-2 flex flex-col bg-slate-900/50 rounded-[2.5rem] border border-slate-800 h-[550px] overflow-hidden">
             <div className="p-5 bg-slate-950/50 border-b border-slate-800 flex justify-between items-center">
                <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center">
                  <span className="w-2 h-2 rounded-full bg-green-500 mr-2 animate-pulse"></span>
@@ -173,6 +284,7 @@ export default function MasterAstraDashboard() {
                {isPlayingAudio && <span className="text-[9px] font-bold text-cyan-500 animate-pulse tracking-widest">TRANSMITTING AUDIO...</span>}
             </div>
             
+            {/* Messages Feed */}
             <div className="flex-1 overflow-y-auto p-8 space-y-8 scroll-smooth">
                {history.length > 0 ? (
                  history.slice(0, 8).reverse().map((msg) => (
@@ -199,10 +311,28 @@ export default function MasterAstraDashboard() {
                )}
                <div ref={messagesEndRef} />
             </div>
+
+            {/* SYMPTOM INPUT FORM */}
+            <form onSubmit={handleSymptomSubmit} className="p-5 bg-slate-950/80 border-t border-slate-800 flex gap-3">
+               <input 
+                 type="text" 
+                 placeholder="Describe your symptoms to refine analysis (e.g. 'I have a headache')..." 
+                 value={symptomInput}
+                 onChange={(e) => setSymptomInput(e.target.value)}
+                 className="flex-1 bg-black border border-slate-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-cyan-500 text-white placeholder:text-slate-600 transition-all font-medium"
+               />
+               <button 
+                 type="submit"
+                 disabled={!symptomInput || !latestData || isSubmitting}
+                 className="px-6 py-3 bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-800 disabled:text-slate-500 text-white font-black uppercase tracking-widest rounded-xl text-[10px] transition-all shadow-[0_0_15px_rgba(6,182,212,0.15)] disabled:shadow-none"
+               >
+                 {isSubmitting ? 'Analyzing...' : 'Analyze'}
+               </button>
+            </form>
           </div>
 
           {/* COMPACT TELEMETRY LOG */}
-          <div className="bg-slate-900/50 rounded-[2.5rem] p-8 border border-slate-800 flex flex-col h-[500px]">
+          <div className="bg-slate-900/50 rounded-[2.5rem] p-8 border border-slate-800 flex flex-col h-[550px]">
             <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-6 border-b border-slate-800 pb-4">
               Historical Scans
             </h3>
