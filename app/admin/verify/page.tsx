@@ -11,6 +11,7 @@ export default function MasterAdminMappingPortal() {
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
   const [pageLoading, setPageLoading] = useState(true);
+  const [isSimulating, setIsSimulating] = useState(false);
   
   const router = useRouter();
 
@@ -61,6 +62,44 @@ export default function MasterAdminMappingPortal() {
       supabase.removeChannel(channel); 
     };
   }, [router]);
+
+  // ==========================================
+  // 🧪 DUMMY API SIMULATOR (HARDWARE BYPASS)
+  // ==========================================
+  const handleSimulateScan = async () => {
+    setIsSimulating(true);
+    setStatus("Transmitting dummy hardware signal...");
+    
+    try {
+      // Generate realistic randomized vitals
+      const dummyTemp = (36.5 + Math.random() * 2.5).toFixed(1); // 36.5 to 39.0
+      const dummyBpm = Math.floor(70 + Math.random() * 35).toString(); // 70 to 105
+      const dummySpo2 = Math.floor(95 + Math.random() * 5).toString(); // 95 to 99
+
+      // Call your exact Next.js API route just like the ESP32
+      const response = await fetch('/api/gemini-health', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Device-Id': 'SIMULATOR-NODE-01',
+          'X-Temp': dummyTemp,
+          'X-Bpm': dummyBpm,
+          'X-Spo2': dummySpo2,
+        },
+        body: JSON.stringify({ symptoms: "" }) 
+      });
+
+      if (!response.ok) throw new Error("Simulator failed to reach the API.");
+      
+      // We don't need to manually setPendingVitals here because the 
+      // Supabase Realtime Listener (in useEffect) will catch the DB insert automatically!
+      setStatus("Dummy signal intercepted by Database.");
+    } catch (err: any) {
+      setStatus(`Simulation Error: ${err.message}`);
+    } finally {
+      setIsSimulating(false);
+    }
+  };
 
   // ==========================================
   // 🔗 MAPPING LOGIC: Verify & Link
@@ -187,10 +226,22 @@ export default function MasterAdminMappingPortal() {
                 </div>
               </div>
             ) : (
-              <div className="h-full border-2 border-dashed border-slate-800 rounded-2xl flex flex-col items-center justify-center text-slate-600 space-y-3">
+              <div className="h-full border-2 border-dashed border-slate-800 rounded-2xl flex flex-col items-center justify-center text-slate-600 space-y-4">
                 <svg className="w-8 h-8 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                <p className="text-xs font-black uppercase tracking-widest">Awaiting ESP32 Signal</p>
-                <p className="text-[9px] font-bold uppercase tracking-widest opacity-60">Trigger Ultrasonic Sensor to begin</p>
+                <div className="text-center space-y-1">
+                  <p className="text-xs font-black uppercase tracking-widest">Awaiting ESP32 Signal</p>
+                  <p className="text-[9px] font-bold uppercase tracking-widest opacity-60">Trigger MAX Sensor to begin</p>
+                </div>
+                
+                {/* 🧪 THE SIMULATOR BUTTON */}
+                <button 
+                  onClick={handleSimulateScan}
+                  disabled={isSimulating}
+                  className="mt-4 px-6 py-2 bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 hover:border-cyan-500 text-[9px] font-black uppercase tracking-widest rounded-xl transition-all"
+                >
+                  {isSimulating ? "Transmitting..." : "Simulate ESP32 Scan"}
+                </button>
+
               </div>
             )}
           </div>
@@ -215,7 +266,7 @@ export default function MasterAdminMappingPortal() {
                 <label className="block text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] mb-2 ml-1">Medical Email Address</label>
                 <input 
                   type="email"
-                  placeholder="soham@example.com"
+                  placeholder="name@example.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="w-full bg-black border border-slate-800 rounded-xl px-5 py-4 text-sm focus:outline-none focus:border-cyan-500 transition-all font-bold text-white placeholder:text-slate-700"
