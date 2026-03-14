@@ -103,7 +103,14 @@ export async function POST(request: NextRequest) {
 
       let rawText = result.response.text();
       rawText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
+      
+      // 🔥 LOG RAW TEXT TO VERCEL DASHBOARD
+      console.log("=== RAW GEMINI TEXT ===", rawText);
+      
       let aiOutput = JSON.parse(rawText);
+      
+      // 🔥 LOG PARSED JSON TO VERCEL DASHBOARD
+      console.log("=== PARSED JSON OBJECT ===", aiOutput);
 
       safeUserId = aiOutput.identified_user_id;
       if (safeUserId === "null" || safeUserId === "None" || safeUserId === "") {
